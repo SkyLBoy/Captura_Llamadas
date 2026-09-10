@@ -1,0 +1,17 @@
+{
+  "passed": [
+    "HTTP login, health and agent authorization",
+    "Import BASE, formula cached value, nameless contact and SQL savepoint recovery",
+    "Distribution cannot mix campaign bases",
+    "Authorized contact detail includes phone and mail",
+    "Repeated open returns same call and recovery route retrieves it",
+    "Survey finishes before call end and repeated close cannot overwrite",
+    "Report contains campaign history, raw surveys, hidden data and PNG graphs",
+    "Admin classifies channels with actor audit and data changes preserve dialed number",
+    "Two close requests permit one successful write",
+    "Business-name change blocks contact and preserves historical name",
+    "Deactivated account loses existing session access"
+  ],
+  "engine": "PGlite, single-connection adapter",
+  "limitations": "No production PostgreSQL or LAN deployment tested"
+}

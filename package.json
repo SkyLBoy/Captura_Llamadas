@@ -1,0 +1,40 @@
+{
+  "name": "vincco-telemarketing-backend",
+  "version": "0.1.0",
+  "description": "Backend interno para gestion de llamadas de telemarketing y cierres mensuales (PARTNER DELL / SILIMEX)",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch backend/src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "test:db": "node tests/database/test_schema.mjs",
+    "bootstrap:admin": "tsx backend/src/scripts/bootstrap-admin.ts",
+    "test:backend": "npm run build && node tests/backend/integration.mjs"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^9.3.1",
+    "@fastify/multipart": "^8.3.0",
+    "@fastify/session": "^10.9.0",
+    "@napi-rs/canvas": "^0.1.80",
+    "argon2": "^0.40.3",
+    "dayjs": "^1.11.13",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "fastify": "^4.28.1",
+    "kysely": "^0.27.4",
+    "pg": "^8.12.0",
+    "proyecto_capturar_llamadas": "file:..",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.15",
+    "@types/pg": "^8.11.6",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}

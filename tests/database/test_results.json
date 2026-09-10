@@ -1,0 +1,25 @@
+{
+  "engine": "PostgreSQL 18.3 (PGlite 0.5.8) on wasm32-unknown-emscripten, compiled by emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 3.1.74 (1092ec30a3fb1d46b1782ff1b4db5094d3d06ae5), 32-bit",
+  "tests": 14,
+  "passed": [
+    "Esquema completo, catálogos y vistas en una base vacía",
+    "Auditoría registra clave correcta, actor y valores",
+    "Asignación simultánea del mismo cliente y campaña rechazada",
+    "Inicio, recuperación, idempotencia y una llamada abierta por agente",
+    "Resultados incompatibles o pendientes rechazados; llamada sigue abierta",
+    "Identidad histórica y coherencia de asignación",
+    "TPA incluye ceros inválidos, excluye NO CONTESTA y abiertos",
+    "Mes local y porcentaje cero cuando nadie fue atendido",
+    "Blacklist automático, exclusión y conservación histórica",
+    "Encuesta completa se guarda atómicamente con el cierre",
+    "Opciones de otras preguntas y razones obligatorias rechazadas",
+    "Negativa a encuesta y razón social que envía a Blacklist",
+    "Importación repetida y trazabilidad",
+    "Triggers de actualización: todas las tablas referidas tienen columna"
+  ],
+  "limitations": [
+    "Motor PostgreSQL embebido PGlite; no prueba de concurrencia entre conexiones ni de instalación del servidor Windows.",
+    "No se importaron datos reales.",
+    "Catálogos pendientes permanecen inactivos."
+  ]
+}

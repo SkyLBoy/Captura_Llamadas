@@ -85,6 +85,70 @@ export async function importContactsFromExcel(opts: {
     );
   }
 
+  // Relación de clientes y sucursales del formato SILIMEX.
+const branchNameByCode = new Map<string, string>();
+const branchCodeByClient = new Map<string, string>();
+
+const normalizeKey = (value: string) => value.trim().toUpperCase();
+const dataSheet = workbook.getWorksheet('DATOS');
+
+if (dataSheet) {
+  const header = (column: number) =>
+    normalizeKey(cellToString(dataSheet.getCell(1, column).value) ?? '');
+
+  // Verificamos la estructura antes de interpretar sus columnas.
+  const matchesSilimexLayout =
+    header(1) === 'CLAVE' &&
+    header(14) === 'CLAVE' &&
+    header(16) === 'CLAVE' &&
+    ['SUC', 'SUCURSAL'].includes(header(17));
+
+  if (matchesSilimexLayout) {
+    for (let rowNumber = 2; rowNumber <= dataSheet.rowCount; rowNumber++) {
+      const row = dataSheet.getRow(rowNumber);
+
+      // P:Q contiene el catálogo independiente de sucursales.
+      const catalogCode = cellToString(row.getCell(16).value);
+      const branchName = cellToString(row.getCell(17).value);
+
+      if (catalogCode && branchName) {
+        const code = normalizeKey(catalogCode);
+        const previousName = branchNameByCode.get(code);
+
+        if (previousName && previousName !== branchName) {
+          throw new AppError(
+            400,
+            `La sucursal ${code} tiene nombres distintos en DATOS.`,
+            'BRANCH_NAME_CONFLICT',
+          );
+        }
+
+        branchNameByCode.set(code, branchName);
+      }
+
+      // A identifica al cliente; O contiene su código de sucursal.
+      const clientKey = cellToString(row.getCell(1).value);
+      const branchCode = cellToString(row.getCell(15).value);
+
+      if (clientKey && branchCode) {
+        const key = normalizeKey(clientKey);
+        const code = normalizeKey(branchCode);
+        const previousCode = branchCodeByClient.get(key);
+
+        if (previousCode && previousCode !== code) {
+          throw new AppError(
+            400,
+            `El cliente ${key} tiene sucursales distintas en DATOS.`,
+            'CLIENT_BRANCH_CONFLICT',
+          );
+        }
+
+        branchCodeByClient.set(key, code);
+      }
+    }
+  }
+}
+
   return withTransaction(opts.userId, async (trx) => {
     const agent=await trx.selectFrom('users').select('user_id').where('user_id','=',opts.agentId).where('role','=','agent').where('is_active','=',true).executeTakeFirst();
     if(!agent) throw new AppError(400,'Selecciona un agente activo.','INVALID_AGENT');
@@ -92,6 +156,23 @@ export async function importContactsFromExcel(opts: {
     // El indice unico parcial uq_successful_import lo garantiza; aqui damos
     // un mensaje mas claro antes de dejar que truene el insert.
     await sql`SELECT pg_advisory_xact_lock(${opts.campaignId})`.execute(trx);
+    const workRound = await trx
+      .selectFrom('work_rounds')
+      .select('round_id')
+      .where('campaign_id', '=', opts.campaignId)
+      .where('agent_id', '=', opts.agentId)
+      .where('ended_at', 'is', null)
+      .where(sql<boolean>`started_at <= CURRENT_TIMESTAMP`)
+      .forUpdate()
+      .executeTakeFirst();
+
+    if (!workRound) {
+      throw new AppError(
+        409,
+        'El agente no tiene una ronda activa para esta campaña. Habilita una ronda antes de importar.',
+        'NO_ACTIVE_ROUND',
+      );
+    }
     const already = await trx
       .selectFrom('import_log')
       .select('import_id')
@@ -130,7 +211,18 @@ export async function importContactsFromExcel(opts: {
       const cell = (i: number) => (i > 0 ? values[i] : undefined);
 
       if (values.every(v => v === null || v === undefined || v === '')) continue;
-      rowsProcessed++;
+      {
+        const normalizeLabel = (value: unknown) =>
+          typeof value === 'string' ? value.trim().toUpperCase() : '';
+        const  isBranchDirectoryRow =
+          normalizeLabel(cell(idx.marca)) === 'SUCURSAL' ||
+          normalizeLabel(cell(idx.tipoCompra)) === 'SUCURSAL';
+
+        if (isBranchDirectoryRow) {
+          continue;
+        }
+        rowsProcessed++;
+      }
       const sourceData = Object.fromEntries(
         Object.entries(idx).map(([key, i]) => [key, cell(i) ?? null]),
       );
@@ -140,9 +232,27 @@ export async function importContactsFromExcel(opts: {
         const clave=cellToString(cell(idx.clave));
         if(!clave) throw new AppError(400,'Falta CLAVE.','MISSING_CLIENT_KEY');
         const razonSocial = cellToString(cell(idx.razonSocial));
+        const explicitBranch = cellToString(cell(idx.sucursal));
+        const branchCode = branchCodeByClient.get(normalizeKey(clave));
+        const mappedBranch = branchCode
+          ? branchNameByCode.get(branchCode)
+          : undefined;
+
+        if (branchCode && !mappedBranch) {
+          throw new AppError(
+            400,
+            `La sucursal ${branchCode} del cliente ${clave} no está en el catálogo.`,
+            'UNKNOWN_BRANCH',
+          );
+        }
+
+        const sucursal = mappedBranch
+          ?? (explicitBranch
+            ? branchNameByCode.get(normalizeKey(explicitBranch)) ?? explicitBranch
+            : null);
         const existingClient = await trx
           .selectFrom('clients')
-          .select(['client_id','razon_social'])
+          .select(['client_id','razon_social','sucursal'])
           .where('source_namespace', '=', sourceNamespace)
           .where('clave', '=', clave)
           .executeTakeFirst();
@@ -157,7 +267,7 @@ export async function importContactsFromExcel(opts: {
               marca: cellToString(cell(idx.marca)),
               tipo_compra: cellToString(cell(idx.tipoCompra)),
               razon_social: razonSocial,
-              sucursal: cellToString(cell(idx.sucursal)),
+              sucursal: sucursal,
             })
             .returning(['client_id'])
             .executeTakeFirstOrThrow());
@@ -173,7 +283,7 @@ export async function importContactsFromExcel(opts: {
               marca: cellToString(cell(idx.marca)),
               tipo_compra: cellToString(cell(idx.tipoCompra)),
               razon_social: razonSocial,
-              sucursal: cellToString(cell(idx.sucursal)),
+              sucursal: sucursal,
             })
             .where('client_id', '=', client.client_id)
             .execute();
@@ -219,9 +329,34 @@ export async function importContactsFromExcel(opts: {
           }
         }
 
-        const assignment = await trx.selectFrom('contact_assignments').select(['agent_id']).where('client_id', '=', client.client_id).where('campaign_id', '=', opts.campaignId).where('ended_at', 'is', null).executeTakeFirst();
-        if (assignment && assignment.agent_id !== opts.agentId) throw new AppError(409, 'Contacto asignado a otro agente.', 'ASSIGNMENT_CONFLICT');
-        if (!assignment) await trx.insertInto('contact_assignments').values({ client_id: client.client_id, contact_id: contactId, campaign_id: opts.campaignId, agent_id: opts.agentId }).execute();
+        const assignment = await trx
+          .selectFrom('contact_assignments')
+          .select(['agent_id', 'round_id'])
+          .where('client_id', '=', client.client_id)
+          .where('campaign_id', '=', opts.campaignId)
+          .where('ended_at', 'is', null)
+          .executeTakeFirst();
+        if (assignment && assignment.agent_id !== opts.agentId){ 
+          throw new AppError(
+            409, 
+            'Contacto asignado a otro agente.', 
+            'ASSIGNMENT_CONFLICT'
+        );
+      }
+        if (assignment && assignment.round_id !== workRound.round_id) {
+          throw new AppError(
+            409,
+             'La asignacion del contacto no pertenece a la ronda activa',
+              'ASSIGNMENT_ROUND_CONFLICT'
+          );
+        }
+        if (!assignment) await trx
+          .insertInto('contact_assignments')
+          .values({ client_id: client.client_id, 
+            contact_id: contactId, 
+            campaign_id: opts.campaignId, 
+            agent_id: opts.agentId })
+            .execute();
         await trx
           .insertInto('import_detail')
           .values({
@@ -282,6 +417,27 @@ export async function distributeContacts(opts: {
 
   return withTransaction(opts.userId, async (trx) => {
     await sql`SELECT pg_advisory_xact_lock(${opts.campaignId})`.execute(trx);
+    const activeRounds = await trx
+      .selectFrom('work_rounds')
+      .select(['round_id', 'agent_id'])
+      .where('campaign_id', '=', opts.campaignId)
+      .where('agent_id', 'in', opts.agentIds)
+      .where('ended_at', 'is', null)
+      .where(sql<boolean>`started_at <= CURRENT_TIMESTAMP`)
+      .forUpdate()
+      .execute();
+
+    const roundByAgent = new Map(
+      activeRounds.map(round => [round.agent_id, round.round_id])
+    );
+
+    if (opts.agentIds.some(agentId => !roundByAgent.has(agentId))) {
+      throw new AppError(
+        409,
+        'Todos los agentes seleccionados deben tener una ronda activa en esta campaña.',
+        'NO_ACTIVE_ROUND',
+      );
+    }
     const namespace = await namespaceForCampaign(trx, opts.campaignId);
     const unassigned = await trx
       .selectFrom('clients as c')
@@ -306,9 +462,24 @@ export async function distributeContacts(opts: {
     let i = 0;
     for (const row of unassigned) {
       const agentId = opts.agentIds[i % opts.agentIds.length]!;
+      const roundId = roundByAgent.get(agentId)!;
+
+      if (!roundId === undefined) {
+        throw new AppError(
+          400,
+          'No se encontró la ronda del agente',
+          'NO_ACTIVE_ROUND',
+        );
+      }
+
       await trx
         .insertInto('contact_assignments')
-        .values({ client_id: row.client_id, campaign_id: opts.campaignId, agent_id: agentId })
+        .values({ 
+          client_id: row.client_id, 
+          campaign_id: opts.campaignId, 
+          agent_id: agentId, 
+          round_id: roundId
+        })
         .execute();
       i++;
     }

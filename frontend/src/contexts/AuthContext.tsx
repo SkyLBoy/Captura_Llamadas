@@ -1,3 +1,4 @@
+import { api } from '../services/api'
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 
 interface AuthContextType {
@@ -20,25 +21,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [isLoading, setIsLoading] = useState(true)
 
   const login = async (username: string, password: string) => {
+    const data = await api.auth.login(username, password)
     try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ username, password }),
-      })
-
-      if (!response.ok) {
-        throw new Error('Credenciales incorrectas')
-      }
-
-      const data = await response.json()
-      setUser(data.user)
-    } catch (error) {
-      throw error
+      sessionStorage.removeItem(`selectedCampaign:${data.user.id}`)
+    } catch {
+      // Ignored
     }
+    setUser(data.user)
   }
 
   const logout = async () => {
@@ -48,6 +37,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         credentials: 'include',
       })
     } finally {
+      try{
+        if(user) {
+          sessionStorage.removeItem(`selectedCampaign:${user.id}`)
+        }
+      } catch {
+        // Ignored
+      }
       setUser(null)
     }
   }
@@ -61,7 +57,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
       if (response.ok) {
         const data = await response.json()
-        setUser(data.user)
+        setUser({ ...data.user, id: data.user.id ?? data.user.userId })
       } else {
         setUser(null)
       }

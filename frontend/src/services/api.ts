@@ -2,6 +2,29 @@
 
 const API_BASE_URL = '/api'
 
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
+async function getErrorMessage(
+  response: Response,
+  fallback: string
+): Promise<string> {
+  try {
+    const data = await response.json()
+    const message = data?.error?.message ?? data?.message
+
+    return typeof message === 'string' && message.trim()
+      ? message
+      : fallback
+  } catch {
+    return fallback
+  }
+}
+
 export const api = {
   auth: {
     login: async (username: string, password: string) => {
@@ -14,10 +37,11 @@ export const api = {
         body: JSON.stringify({ username, password }),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.message || 'Error al iniciar sesión')
-      }
+        if (!response.ok) {
+          throw new Error(
+            await getErrorMessage(response, 'Error al iniciar sesión')
+          )
+        }
 
       return response.json()
     },
@@ -28,7 +52,9 @@ export const api = {
       })
 
       if (!response.ok) {
-        throw new Error('Error al cerrar sesión')
+        throw new Error(
+          await getErrorMessage(response, 'Error al cerrar sesión')
+        )
       }
 
       return response.json()
@@ -39,7 +65,9 @@ export const api = {
       })
 
       if (!response.ok) {
-        throw new Error('Error al obtener la sesión')
+        throw new Error(
+          await getErrorMessage(response, 'Error al obtener la sesión')
+        )
       }
 
       return response.json()
@@ -52,7 +80,9 @@ export const api = {
       })
 
       if (!response.ok) {
-        throw new Error('Error al obtener las campañas')
+        throw new Error(
+          await getErrorMessage(response, 'Error al obtener las campañas')
+        )
       }
 
       return response.json()
@@ -68,7 +98,9 @@ export const api = {
       )
 
       if (!response.ok) {
-        throw new Error('Error al obtener los catálogos')
+        throw new Error(
+          await getErrorMessage(response, 'Error al obtener los catálogos')
+        )
       }
 
       return response.json()
@@ -81,7 +113,9 @@ export const api = {
       })
 
       if (!response.ok) {
-        throw new Error('Error al obtener el intento abierto')
+        throw new Error(
+          await getErrorMessage(response, 'Error al obtener el intento abierto')
+        )
       }
 
       return response.json()
@@ -93,7 +127,7 @@ export const api = {
       clientId: number
       contactId: number | null
       dialedNumber: string
-      dialedExtension: string | null
+      dialedExtension?: string
     }) => {
       const response = await fetch(`${API_BASE_URL}/calls`, {
         method: 'POST',
@@ -105,8 +139,9 @@ export const api = {
       })
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.message || 'Error al crear la llamada')
+        throw new ApiError(response.status,
+          await getErrorMessage(response, 'Error al crear la llamada')
+        )
       }
 
       return response.json()
@@ -142,8 +177,9 @@ export const api = {
       )
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.message || 'Error al cerrar la llamada')
+        throw new Error(
+          await getErrorMessage(response, 'Error al cerrar la llamada')
+        )
       }
 
       return response.json()
@@ -167,8 +203,9 @@ export const api = {
       })
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.message || 'Error al importar contactos')
+        throw new Error(
+          await getErrorMessage(response, 'Error al importar contactos')
+        )
       }
 
       return response.json()
@@ -182,7 +219,9 @@ export const api = {
       )
 
       if (!response.ok) {
-        throw new Error('Error al obtener el contacto')
+        throw new Error(
+          await getErrorMessage(response, 'Error al obtener el contacto')
+        )
       }
 
       return response.json()
@@ -198,7 +237,9 @@ export const api = {
       })
 
       if (!response.ok) {
-        throw new Error('Error al obtener los contactos disponibles')
+        throw new Error(
+          await getErrorMessage(response, 'Error al obtener los contactos disponibles')
+        )
       }
 
       return response.json()
@@ -214,7 +255,9 @@ export const api = {
       )
 
       if (!response.ok) {
-        throw new Error('Error al obtener la versión activa de la encuesta')
+        throw new Error(
+          await getErrorMessage(response, 'Error al obtener la versión activa de la encuesta')
+        )
       }
 
       return response.json()
@@ -235,7 +278,9 @@ export const api = {
       )
 
       if (!response.ok) {
-        throw new Error('Error al generar el reporte mensual')
+        throw new Error(
+          await getErrorMessage(response, 'Error al generar el reporte mensual')
+        )
       }
 
       // Para archivos binarios como Excel, devolveremos el blob
@@ -250,14 +295,102 @@ export const api = {
     },
   },
   admin: {
-    getUsers: async () => {
-      const response = await fetch(`${API_BASE_URL}/admin/users`, {
+    getRoundHistory: async (campaignId: number, agentId: number) => {
+  const response = await fetch(
+    `${API_BASE_URL}/admin/rondas/historial?campaignId=${campaignId}&agentId=${agentId}`,
+    {
+      credentials: 'include',
+    }
+  )
+
+        if (!response.ok) {
+          throw new Error(
+            await getErrorMessage(
+              response,
+              'Error al consultar el historial de rondas'
+            )
+          )
+        }
+
+      return response.json() as Promise<{
+        rounds: {
+          round_id: number
+          name: string
+          started_at: string
+          ended_at: string | null
+        }[]
+      }>
+    },
+      getRoundSummary: async (campaignId: number, agentId: number) => {
+        const response = await fetch(
+        `${API_BASE_URL}/admin/rondas/resumen?campaignId=${campaignId}&agentId=${agentId}`,
+        {
+          credentials: 'include',
+        }
+      )
+
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, 'Error al consultar la ronda')
+        )
+      }
+
+      return response.json() as Promise<{
+        round: {
+          round_id: number
+          name: string
+          started_at: string
+          ended_at: string | null
+        } | null
+        summary: {
+          assigned: number
+          blocked: number
+          inactive: number
+          eligible: number
+        }
+        hasOpenCall: boolean
+      }>
+    },
+
+    startRound: async (data: {
+      campaignId: number
+      agentId: number
+      name: string
+      expectedRoundId: number | null
+    }) => {
+      const response = await fetch(`${API_BASE_URL}/admin/rondas`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
         credentials: 'include',
+        body: JSON.stringify(data),
       })
 
       if (!response.ok) {
-        throw new Error('Error al obtener los usuarios')
+        throw new Error(
+          await getErrorMessage(response, 'Error al habilitar la ronda')
+        )
       }
+
+      return response.json() as Promise<{
+        round: {
+          round_id: number
+          name: string
+        }
+        enabledContacts: number
+      }>
+    },
+      getUsers: async () => {
+        const response = await fetch(`${API_BASE_URL}/admin/users`, {
+          credentials: 'include',
+        })
+
+        if (!response.ok) {
+          throw new Error(
+            await getErrorMessage(response, 'Error al obtener los usuarios')
+          )
+        }
 
       return response.json()
     },
@@ -267,7 +400,9 @@ export const api = {
       })
 
       if (!response.ok) {
-        throw new Error('Error al obtener las canalizaciones pendientes')
+        throw new Error(
+          await getErrorMessage(response, 'Error al obtener las canalizaciones pendientes')
+        )
       }
 
       return response.json()
@@ -286,8 +421,9 @@ export const api = {
       )
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.message || 'Error al clasificar la canalización')
+        throw new Error(
+          await getErrorMessage(response, 'Error al clasificar la canalización')
+        )
       }
 
       return response.json()
@@ -303,7 +439,9 @@ export const api = {
       })
 
       if (!response.ok) {
-        throw new Error('Error al obtener la lista negra')
+        throw new Error(
+          await getErrorMessage(response, 'Error al obtener la lista negra')
+        )
       }
 
       return response.json()
@@ -318,7 +456,9 @@ export const api = {
       )
 
       if (!response.ok) {
-        throw new Error('Error al liberar de la lista negra')
+        throw new Error(
+          await getErrorMessage(response, 'Error al liberar de la lista negra')
+        )
       }
 
       return response.json()
@@ -339,8 +479,9 @@ export const api = {
       })
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.message || 'Error al crear el usuario')
+        throw new Error(
+          await getErrorMessage(response, 'Error al crear el usuario')
+        )
       }
 
       return response.json()

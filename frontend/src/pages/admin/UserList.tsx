@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useApi } from '../../hooks/useApi'
 import { api } from '../../services/api'
+import { Link } from 'react-router-dom'
 
 const UserList: React.FC = () => {
   const { user } = useAuth()
@@ -40,7 +41,16 @@ const UserList: React.FC = () => {
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-bold mb-4">Gestión de Usuarios</h2>
+        <div className= "mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-xl font-bold">Gestión de Usuarios</h2>
+            <Link
+              to="/gestion/crear-usuario"
+              className="rounded-md bg-indigo-600 px-4 py-2 font-medium text-white hover:bg-indigo-700"
+            >
+              Crear Usuario
+            </Link>
+          </div>
+        </div>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
@@ -120,7 +130,6 @@ const UserList: React.FC = () => {
           </table>
         </div>
       </div>
-    </div>
   )
 }
 

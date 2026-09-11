@@ -92,14 +92,41 @@ export interface EmailAddressesTable {
   updated_at: Generated<TimestampTz>;
 }
 
+export interface WorkRoundsTable {
+  round_id: Generated<number>;
+  campaign_id: number;
+  agent_id: number;
+  name: string;
+  started_at: ColumnType<
+  Date, 
+  Date | string | undefined,
+  Date | string
+  >;
+  ended_at: ColumnType<
+    Date | null,
+    Date | string | null | undefined,
+    Date | string | null
+  >;
+  created_by_user_id: Generated<number | null>;
+}
+
 export interface ContactAssignmentsTable {
   assignment_id: Generated<number>;
   client_id: number;
   contact_id: Generated<number | null>;
   campaign_id: number;
   agent_id: number;
-  started_at: Generated<TimestampTz>;
-  ended_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  round_id: Generated<number | null>;
+  started_at: ColumnType<
+    Date, 
+    Date | string | undefined,
+    Date | string
+  >;
+  ended_at: ColumnType<
+    Date | null,
+    Date | string | null | undefined,
+    Date | string | null
+  >;
   created_at: Generated<TimestampTz>;
   updated_at: Generated<TimestampTz>;
 }
@@ -335,6 +362,7 @@ export interface Database {
   phone_numbers: PhoneNumbersTable;
   email_addresses: EmailAddressesTable;
   contact_assignments: ContactAssignmentsTable;
+  work_rounds: WorkRoundsTable;
   call_attempts: CallAttemptsTable;
   contact_blacklist: ContactBlacklistTable;
   questionnaire_versions: QuestionnaireVersionsTable;

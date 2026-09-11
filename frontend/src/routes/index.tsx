@@ -7,6 +7,8 @@ import UserList from '../pages/admin/UserList'
 import PendingChannels from '../pages/admin/PendingChannels'
 import Blacklist from '../pages/admin/Blacklist'
 import CreateUser from '../pages/admin/CreateUser'
+import ImportContacts from '../pages/admin/ImportContacts'
+import WorkRounds from '../pages/admin/WorkRounds'
 
 const routes = [
   {
@@ -43,6 +45,14 @@ const routes = [
         path: 'crear-usuario',
         element: <CreateUser />,
       },
+      {
+        path: 'importar-contactos',
+        element: <ImportContacts />,
+      },
+      {
+        path: 'rondas',
+        element: <WorkRounds />,
+      }
     ],
   },
   {

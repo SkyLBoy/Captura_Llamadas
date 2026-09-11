@@ -45,6 +45,56 @@ export async function openCall(input: OpenCallInput, userId: number) {
     await sql`SELECT pg_advisory_xact_lock(${input.agentId})`.execute(trx);
     const existing = await trx.selectFrom('call_attempts').selectAll()
       .where('idempotency_key', '=', input.idempotencyKey).executeTakeFirst();
+
+    const assignment = await trx
+    .selectFrom('contact_assignments as assignment')
+      .innerJoin(
+        'work_rounds as round',
+        'round.round_id',
+        'assignment.round_id',
+      )
+      .select('assignment.round_id')
+      .where('assignment.assignment_id', '=', input.assignmentId)
+      .where('assignment.client_id', '=', input.clientId)
+      .where('assignment.campaign_id', '=', input.campaignId)
+      .where('assignment.agent_id', '=', input.agentId)
+      .where('assignment.ended_at', 'is', null)
+      .where('round.ended_at', 'is', null)
+      .where(sql<boolean>`"round"."started_at" <= CURRENT_TIMESTAMP`)
+      .forUpdate()
+      .executeTakeFirst();
+
+    if (!assignment || assignment.round_id === null) {
+      throw new AppError(
+        409,
+        'El contacto no tiene una asignación y ronda vigentes.',
+        'NO_ACTIVE_ROUND',
+      );
+    }
+
+    const previousAttempt = await trx
+      .selectFrom('call_attempts as attempt')
+      .innerJoin(
+        'contact_assignments as assignment',
+        'assignment.assignment_id',
+        'attempt.assignment_id',
+      )
+      .select(['attempt.attempt_id', 'attempt.state'])
+      .where('assignment.round_id', '=', assignment.round_id)
+      .where('attempt.client_id', '=', input.clientId)
+      .where('attempt.campaign_id', '=', input.campaignId)
+      .where('attempt.origin', '=', 'live')
+      .executeTakeFirst();
+
+    if (previousAttempt) {
+      throw new AppError(
+        409,
+        previousAttempt.state === 'open'
+          ? 'Este contacto tiene una llamada abierta. Continúa ese registro.'
+          : 'Este contacto ya fue gestionado en la ronda actual.',
+        'CONTACT_ALREADY_STARTED',
+      );
+    }
     if (existing) {
       if (existing.agent_id !== input.agentId || existing.assignment_id !== input.assignmentId ||
           existing.client_id !== input.clientId || existing.campaign_id !== input.campaignId ||

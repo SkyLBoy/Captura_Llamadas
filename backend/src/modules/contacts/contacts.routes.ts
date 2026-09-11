@@ -5,6 +5,7 @@ import { requireRole } from '../../middleware/requireRole.js';
 import { requireAuth } from '../../middleware/requireAuth.js';
 import { AppError } from '../../utils/errors.js';
 import { distributeContacts, importContactsFromExcel } from './import.service.js';
+import { sql } from 'kysely';
 
 const DistributeSchema = z.object({
   campaignId: z.coerce.number().int().positive(),
@@ -84,12 +85,47 @@ export async function contactsRoutes(app: FastifyInstance) {
     }
 
     const rows = await db
-      .selectFrom('vw_contactos_disponibles')
-      .selectAll()
-      .where('campaign_id', '=', query.campaignId)
-      .where('agent_id', '=', agentId)
-      .execute();
+      .selectFrom('vw_contactos_disponibles as available')
+      .innerJoin(
+        'contact_assignments as assignment',
+        'assignment.assignment_id',
+        'available.assignment_id',
+      )
+      .innerJoin(
+        'work_rounds as round',
+        'round.round_id',
+        'assignment.round_id',
+      )
+      .selectAll('available')
+      .where('available.campaign_id', '=', query.campaignId)
+      .where('available.agent_id', '=', agentId)
+      .where('round.ended_at', 'is', null)
+      .where(sql<boolean>`"round"."started_at" <= CURRENT_TIMESTAMP`)
+      .where(eb =>
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom('call_attempts as attempt')
+              .innerJoin(
+                'contact_assignments as previous_assignment',
+                'previous_assignment.assignment_id',
+                'attempt.assignment_id',
+              )
+              .select('attempt.attempt_id')
+              .whereRef(
+                'previous_assignment.round_id',
+                '=',
+                'assignment.round_id',
+              )
+              .whereRef('attempt.client_id', '=', 'available.client_id')
+              .whereRef('attempt.campaign_id', '=', 'available.campaign_id')
+              .where('attempt.state', 'in', ['open', 'closed'])
+              .where('attempt.origin', '=', 'live'),
+          ),
+        ),
+      )
+        .execute();
 
-    return reply.send({ contacts: rows });
+      return reply.send({ contacts: rows });
   });
 }

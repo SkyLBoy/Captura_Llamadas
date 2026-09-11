@@ -15,6 +15,15 @@ const ContactList: React.FC = () => {
   const [contacts, setContacts] = useState<Array<any>>([]) // from vw_contactos_disponibles
   const [searchTerm, setSearchTerm] = useState('')
   const [loadingDetail, setLoadingDetail] = useState(false)
+
+  const [openCall, setOpenCall] = useState<{
+    attempt_id: number
+    client_key_snapshot: string
+  } | null>(null)
+
+  const [checkingOpenCall, setCheckingOpenCall] = useState(true)
+  const [openCallError, setOpenCallError] = useState<string | null>(null)
+  const [openCallRetry, setOpenCallRetry] = useState(0)
  
 
   // Redirect admins to management dashboard
@@ -30,12 +39,39 @@ const ContactList: React.FC = () => {
     }
   }, [user])
 
-  const loadCampaigns = async () => {
-    const result = await executeApiCall(() => api.campaigns.getAll())
-    if (result) {
-      setCampaigns(result.campaigns || [])
+  useEffect(() => {
+  if (user?.role !== 'agent') return
+
+  let cancelled = false
+  setCheckingOpenCall(true)
+  setOpenCallError(null)
+
+  const checkOpenCall = async () => {
+    try {
+      const result = await api.calls.getOpen()
+
+      if (!cancelled) {
+        setOpenCall(result.attempt ?? null)
+      }
+    } catch (cause: unknown) {
+      if (!cancelled) {
+        setOpenCallError(
+          cause instanceof Error
+            ? cause.message
+            : 'No se pudo consultar la llamada abierta.'
+        )
+      }
+    } finally {
+      if (!cancelled) setCheckingOpenCall(false)
     }
   }
+
+  checkOpenCall()
+
+  return () => {
+    cancelled = true
+  }
+}, [user?.id, user?.role, openCallRetry])
 
   const loadAvailableContacts = async (campaignId: number) => {
   if (!user || user.role !== 'agent') return
@@ -49,18 +85,64 @@ const ContactList: React.FC = () => {
   }
 }
 
-  const handleCampaignChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const campaignId = parseInt(e.target.value)
+  const loadCampaigns = async () => {
+    const result = await executeApiCall(() => api.campaigns.getAll())
+    if (!result || !user) return
+
+    const availableCampaigns: Array<{
+      campaign_id: number
+      name: string
+    }> = result.campaigns || []
+
+    setCampaigns(availableCampaigns)
+
+    let savedCampaignId: number | null = null
+
+    try {
+      const saved = sessionStorage.getItem(`selectedCampaign:${user.id}`)
+      savedCampaignId = saved ? Number(saved) : null
+    } catch {
+      // La pantalla sigue funcionando si el navegador bloquea el almacenamiento.
+    }
+
+    const savedCampaign = availableCampaigns.find(
+      campaign => campaign.campaign_id === savedCampaignId
+    )
+
+    if (savedCampaign) {
+      setSelectedCampaignId(savedCampaign.campaign_id)
+      await loadAvailableContacts(savedCampaign.campaign_id)
+    }
+  }
+
+    const handleCampaignChange = async (
+    e: React.ChangeEvent<HTMLSelectElement>
+  ) => {
+    const campaignId = e.target.value ? Number(e.target.value) : null
+
     setSelectedCampaignId(campaignId)
     setSearchTerm('')
     setLoadingDetail(false)
     setContacts([])
 
-    if (campaignId && user && user.role === 'agent') {
-      loadAvailableContacts(campaignId)
+    if (!user || user.role !== 'agent') return
+
+    try {
+      const key = `selectedCampaign:${user.id}`
+
+      if (campaignId !== null) {
+        sessionStorage.setItem(key, String(campaignId))
+      } else {
+        sessionStorage.removeItem(key)
+      }
+    } catch {
+      // Permite cambiar de campaña aunque no se pueda recordar la selección.
+    }
+
+    if (campaignId !== null) {
+      await loadAvailableContacts(campaignId)
     }
   }
-
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(e.target.value)
   }
@@ -75,6 +157,7 @@ const ContactList: React.FC = () => {
 
   // Instead of showing a detail modal, we navigate to MakeCall when user selects a contact to call
   const handleCallContact = async (contact: any) => {
+    if (checkingOpenCall || openCallError || openCall) return
     navigate('/llamar', {
       state: {
         campaignId: selectedCampaignId,
@@ -103,6 +186,41 @@ const ContactList: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {checkingOpenCall && (
+  <p role="status">Comprobando si tienes una llamada abierta...</p>
+)}
+
+{openCallError && (
+  <div role="alert" className="rounded-md bg-red-50 p-4 text-red-700">
+    <p>{openCallError}</p>
+    <button
+      type="button"
+      onClick={() => {
+        setCheckingOpenCall(true)
+        setOpenCallRetry(value => value + 1)
+      }}
+      className="mt-2 underline"
+    >
+      Reintentar
+    </button>
+  </div>
+)}
+
+{!checkingOpenCall && !openCallError && openCall && (
+  <div className="rounded-md bg-indigo-50 p-4">
+    <p className="font-medium">
+      Tienes una llamada abierta para {openCall.client_key_snapshot}.
+    </p>
+
+    <button
+      type="button"
+      onClick={() => navigate('/llamar', { state: null })}
+      className="mt-3 rounded-md bg-indigo-600 px-4 py-2 text-white"
+    >
+      Continuar llamada
+    </button>
+  </div>
+)}
       {/* Campaign Selection */}
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-xl font-bold mb-4">Seleccione una campaña</h2>
@@ -176,8 +294,12 @@ const ContactList: React.FC = () => {
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                           <button
                             onClick={() => handleCallContact(contact)}
-                            disabled={loadingDetail}
-                            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                            disabled={
+                              loadingDetail || 
+                              checkingOpenCall || 
+                              openCallError !== null ||
+                              openCall !== null}
+                            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 enabled:hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                           >
                             Llamar
                           </button>

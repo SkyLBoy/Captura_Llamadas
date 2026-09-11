@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { useApi } from '../hooks/useApi'
-import { api } from '../services/api'
-import { useLocation, Navigate } from 'react-router-dom'
+import { createRequestKey, validateSurvey, type SurveyAnswer, type SurveyQuestion } from '../utils/callValidation'
+import { api, ApiError } from '../services/api'
+import { useLocation, useNavigate, Navigate } from 'react-router-dom'
+import { loadCallDraft, saveCallDraft, removeCallDraft} from '../utils/callDraft'
 
 type CallFormData = {
   campaignId: number
@@ -21,6 +22,7 @@ type ContactPerson = {
 
 type PhoneNumber = {
   phone_id: number
+  contact_id: number
   type: 'main' | 'reference1' | 'reference2' | 'mobile' | 'other'
   number: string
   extension: string | null
@@ -28,6 +30,7 @@ type PhoneNumber = {
 
 type EmailAddress = {
   email_id: number
+  contact_id: number
   email: string
 }
 
@@ -48,28 +51,9 @@ type SurveyVersion = {
   version_name: string
 }
 
-type SurveyQuestion = {
-  question_id: number
-  question_text: string
-  question_type: 'single_select' | 'text'
-  required: boolean
-  options: {
-    option_id: number
-    option_text: string
-    requires_reason: boolean
-  }[]
-}
-
 type SurveyData = {
   version: SurveyVersion
   questions: SurveyQuestion[]
-}
-
-// Tipo para las respuestas de encuesta
-type SurveyAnswer = {
-  questionId: number
-  optionId: number | null
-  answerText: string | null
 }
 
 type Channel = {
@@ -81,21 +65,48 @@ type Channel = {
   is_active: boolean
 }
 
+type CallAttempt = {
+  attempt_id: number
+  campaign_id: number
+  client_id: number
+  contact_id: number | null
+  assignment_id: number
+  call_start: string
+  dialed_number: string
+  dialed_extension: string | null
+  state: string
+}
+
 const MakeCall: React.FC = () => {
   const { user } = useAuth()
   const location = useLocation()
-  const { loading, error, executeApiCall } = useApi()
-
+  const navigate = useNavigate()
+  const [detailsStatus, setDetailsStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [detailsError, setDetailsError] = useState<string | null>(null)
+  const [detailsRetry, setDetailsRetry] = useState(0)
+  const startInFlight = useRef(false)
+  const closeInFlight = useRef(false)
+  const pendingStart = useRef<Parameters<typeof api.calls.create>[0] | null>(null)
+  const [draftStatus, setDraftStatus] =
+  useState<'loading' | 'ready' | 'error'>('loading')
+  const [draftError, setDraftError] = useState<string | null>(null)
+  const [draftRetry, setDraftRetry] = useState(0)
+  const restoredDraftKey = useRef<string | null>(null)
+  const [draftSaveError, setDraftSaveError] = useState<string | null>(null)
+  const [draftSaveRetry, setDraftSaveRetry] = useState(0)
   // State for the call flow
-  const [attempt, setAttempt] = useState<any>(null) // open attempt from GET /api/calls/open
+  const [attempt, setAttempt] = useState<CallAttempt | null>(null)
+  const [openAttemptStatus, setOpenAttemptStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [openAttemptRetry, setOpenAttemptRetry] = useState(0) // to trigger re-fetch of open attempt if needed
   const [surveyData, setSurveyData] = useState<SurveyData | null>(null)
+  const [surveyStatus, setSurveyStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [surveyRetry, setSurveyRetry] = useState(0) // to trigger re-fetch of survey if needed
   const [contactDetail, setContactDetail] = useState<ContactDetail | null>(null)
   const [channels, setChannels] = useState<Channel[]>([])
 
   // Form state for starting a call
   const [selectedContactPersonId, setSelectedContactPersonId] = useState<number | null>(null)
   const [selectedPhone, setSelectedPhone] = useState<PhoneNumber | null>(null)
-  const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null)
   const [isCalling, setIsCalling] = useState(false)
   const [callError, setCallError] = useState<string | null>(null)
 
@@ -124,125 +135,342 @@ const MakeCall: React.FC = () => {
   } | undefined
 
   // Load open attempt on mount and when user changes
-  useEffect(() => {
-    if (user) {
-      loadOpenAttempt()
+useEffect(() => {
+  if (!user) return
+
+  let cancelled = false
+  setOpenAttemptStatus('loading')
+
+  const recoverAttempt = async () => {
+    try {
+      const result = await api.calls.getOpen()
+
+      if (!cancelled) {
+        setAttempt(result.attempt ?? null)
+        setOpenAttemptStatus('ready')
+      }
+    } catch {
+      if (!cancelled) {
+        setOpenAttemptStatus('error')
+      }
     }
-  }, [user])
+  }
+
+  recoverAttempt()
+
+  return () => {
+    cancelled = true
+  }
+}, [user, openAttemptRetry])
 
   // Load survey for the campaign when we have an attempt
-  useEffect(() => {
-    if (attempt && attempt.campaignId) {
-      loadSurvey(attempt.campaignId)
-    }
-  }, [attempt])
+useEffect(() => {
+  let cancelled = false
 
-  // Load contact details when we have state
-  useEffect(() => {
-    if (state) {
-      loadContactDetails(state.clientId, state.campaignId)
-      loadChannels(state.campaignId)
-    }
-  }, [state])
+  setSurveyData(null)
+  setSurveyStatus('loading')
 
-  // Load open attempt
-  const loadOpenAttempt = useCallback(async () => {
+  if (!attempt?.campaign_id) return
+
+  const campaignId = attempt.campaign_id
+
+  const fetchSurvey = async () => {
     try {
-      const result = await executeApiCall(() => api.calls.getOpen())
-      setAttempt(result?.attempt ?? null)
-      if (result?.attempt) {
-        // Start timer
-        const startTime = new Date(result.attempt.call_start).getTime()
-        const now = new Date().getTime()
-        const elapsed = Math.floor((now - startTime) / 1000)
-        setElapsedSeconds(elapsed)
-        // Start interval to update timer
-        const interval = setInterval(() => {
-          setElapsedSeconds(prev => prev + 1)
-        }, 1000)
-        return () => clearInterval(interval)
-      }
-    } catch (e) {
-      console.error('Error loading open attempt:', e)
-    }
-  }, [executeApiCall])
+      const response = await api.campaigns.getAll()
 
-  // Load survey for a campaign
-  const loadSurvey = useCallback(async (campaignId: number) => {
-    try {
-      const result = await executeApiCall(() => api.surveys.getActiveVersion(campaignId))
-      setSurveyData(result)
-    } catch (e) {
-      console.error('Error loading survey:', e)
-    }
-  }, [executeApiCall])
+      const campaigns: Array<{
+        campaign_id: number
+        name: string
+      }> = response.campaigns
 
-  // Load contact details (persons, phones, emails)
-  const loadContactDetails = useCallback(async (clientId: number, campaignId: number) => {
-    try {
-      const result = await executeApiCall(() => api.contacts.getByClient(clientId, campaignId))
-      setContactDetail(result)
-    } catch (e) {
-      console.error('Error loading contact details:', e)
-    }
-  }, [executeApiCall])
-
-  // Load channels (for catalogs)
-  const loadChannels = useCallback(async (campaignId: number) => {
-    try {
-      // Note: the catalogs endpoint returns both channels and dispositions
-      // We only need channels for selection
-      const result = await executeApiCall(() => api.catalogs.getByCampaign(campaignId))
-      // The result from api.catalogs.getByCampaign is { channels: [], dispositions: [] }
-      setChannels(result.channels || [])
-    } catch (e) {
-      console.error('Error loading channels:', e)
-    }
-  }, [executeApiCall])
-
-  // Generate a new idempotency key
-  const generateIdempotencyKey = useCallback(() => {
-    const key = crypto.randomUUID()
-    setIdempotencyKey(key)
-    return key
-  }, [])
-
-  // Handle starting a new call
-  const handleStartCall = useCallback(async (formData: CallFormData) => {
-    if (!user) return
-    setIsCalling(true)
-    setCallError(null)
-
-    // Generate idempotency key if not already generated for this attempt
-    const key = idempotencyKey ?? generateIdempotencyKey()
-
-    try {
-      const result = await executeApiCall(() =>
-        api.calls.create({
-          ...formData,
-          idempotencyKey: key
-        })
+      const campaign = campaigns.find(
+        item => item.campaign_id === campaignId
       )
 
-      if (result) {
-        setAttempt(result)
-        // Reset form state for the call (but keep idempotencyKey for potential retry of close?)
-        setSelectedContactPersonId(null)
-        setSelectedPhone(null)
-        setIsCalling(false)
-        // Note: we keep the idempotencyKey in state for the duration of the call attempt
-        // It will be cleared when the call is closed or abandoned
+      if (!campaign) {
+        throw new Error('No se encontró la campaña.')
       }
-    } catch (e: any) {
-      setIsCalling(false)
-      setCallError(e.message || 'Error al iniciar la llamada')
-      // Keep the idempotencyKey so we can retry with the same key
+
+      const result =
+        campaign.name === 'SILIMEX'
+          ? await api.surveys.getActiveVersion(campaignId)
+          : null
+
+      if (!cancelled) {
+        setSurveyData(result)
+        setSurveyStatus('ready')
+      }
+    } catch {
+      if (!cancelled) {
+        setSurveyStatus('error')
+      }
     }
-  }, [user, executeApiCall, idempotencyKey, generateIdempotencyKey])
+  }
+
+  fetchSurvey()
+
+  return () => {
+    cancelled = true
+  }
+}, [attempt?.attempt_id, attempt?.campaign_id, surveyRetry])
+
+  // Ignore late responses from a previously selected client or campaign.
+  useEffect(() => {
+    if (openAttemptStatus !== 'ready') return
+    const clientId = attempt?.client_id ?? state?.clientId
+    const campaignId = attempt?.campaign_id ?? state?.campaignId
+    if (!clientId || !campaignId) return
+    let cancelled = false
+    setDetailsStatus('loading')
+    setDetailsError(null)
+    setContactDetail(null)
+    setChannels([])
+    setSelectedContactPersonId(null)
+    setSelectedPhone(null)
+    setSelectedChannelCode(null)
+    const loadDetails = async () => {
+      try {
+        const [detail, catalog] = await Promise.all([
+          api.contacts.getByClient(clientId, campaignId),
+          api.catalogs.getByCampaign(campaignId),
+        ])
+        if (!cancelled) {
+          setContactDetail(detail)
+          setChannels(catalog.channels ?? [])
+          setDetailsStatus('ready')
+        }
+      } catch (error: unknown) {
+        if (!cancelled) {
+          setDetailsError(error instanceof Error ? error.message : 'No se pudieron cargar los datos.')
+          setDetailsStatus('error')
+        }
+      }
+    }
+    loadDetails()
+    return () => { cancelled = true }
+  }, [openAttemptStatus, attempt?.client_id, attempt?.campaign_id, state?.clientId, state?.campaignId, detailsRetry])
+
+  useEffect(() => {
+  if (!attempt?.call_start) {
+    setElapsedSeconds(0)
+    return
+  }
+
+  const startTime = new Date(attempt.call_start).getTime()
+
+  if (!Number.isFinite(startTime)) {
+    setElapsedSeconds(0)
+    return
+  }
+
+  const updateTimer = () => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000)
+    setElapsedSeconds(Math.max(0, elapsed))
+  }
+
+  updateTimer()
+
+  const interval = window.setInterval(updateTimer, 1000)
+
+  return () => window.clearInterval(interval)
+}, [attempt?.attempt_id, attempt?.call_start])
+
+
+useEffect(() => {
+  if (!user || !attempt) {
+    restoredDraftKey.current = null
+    setDraftStatus('loading')
+    setDraftError(null)
+    return
+  }
+
+  if (detailsStatus !== 'ready' || surveyStatus !== 'ready') return
+
+  const key = `${user.id}:${attempt.attempt_id}`
+
+  if (restoredDraftKey.current === key) return
+
+  setDraftStatus('loading')
+  setDraftError(null)
+
+  try {
+    const draft = loadCallDraft(user.id, attempt.attempt_id)
+
+    if (draft) {
+      const currentVersionId = surveyData?.version.version_id ?? null
+
+      if (draft.surveyVersionId !== currentVersionId) {
+        throw new Error(
+          'La versión de la encuesta cambió. El borrador se conserva, ' +
+          'pero no se recuperará automáticamente sobre otra versión.'
+        )
+      }
+
+      setNotes(draft.notes)
+      setNewDataPhone(draft.newDataPhone)
+      setNewDataEmail(draft.newDataEmail)
+      setNewDataBusinessName(draft.newDataBusinessName)
+
+      const validChannel = channels.some(
+        channel => channel.code === draft.channelCode
+      )
+
+      setSelectedChannelCode(validChannel ? draft.channelCode : null)
+
+      const surveyErrors = surveyData
+        ? validateSurvey(surveyData.questions, draft.surveyAnswers)
+        : {}
+
+      setSurveyAnswers(draft.surveyAnswers)
+      setSurveyDeclined(draft.surveyDeclined)
+      setSurveyErrors(surveyErrors)
+      setSurveyCompleted(
+        !draft.surveyDeclined &&
+        draft.surveyCompleted &&
+        Object.keys(surveyErrors).length === 0
+      )
+    }
+
+    restoredDraftKey.current = key
+    setDraftStatus('ready')
+  } catch (cause: unknown) {
+    setDraftError(
+      cause instanceof Error
+        ? cause.message
+        : 'No se pudo recuperar el borrador.'
+    )
+    setDraftStatus('error')
+  }
+}, [
+  user?.id,
+  attempt?.attempt_id,
+  detailsStatus,
+  surveyStatus,
+  surveyData,
+  channels,
+  draftRetry,
+])
+
+useEffect(() => {
+  if (
+    !user ||
+    !attempt ||
+    draftStatus !== 'ready' ||
+    detailsStatus !== 'ready' ||
+    surveyStatus !== 'ready' ||
+    isClosing
+  ) return
+
+  const key = `${user.id}:${attempt.attempt_id}`
+
+  if (restoredDraftKey.current !== key) return
+
+  try {
+    saveCallDraft(user.id, attempt.attempt_id, {
+      version: 1,
+      notes,
+      channelCode: selectedChannelCode,
+      newDataPhone,
+      newDataEmail,
+      newDataBusinessName,
+      surveyVersionId: surveyData?.version.version_id ?? null,
+      surveyCompleted,
+      surveyDeclined,
+      surveyAnswers,
+    })
+
+    setDraftSaveError(null)
+  } catch {
+    setDraftSaveError(
+      'No se pudo guardar el borrador en esta pestaña. ' +
+      'No recargues ni salgas de la captura hasta guardar la llamada.'
+    )
+  }
+}, [
+  user?.id,
+  attempt?.attempt_id,
+  draftStatus,
+  detailsStatus,
+  surveyStatus,
+  isClosing,
+  notes,
+  selectedChannelCode,
+  newDataPhone,
+  newDataEmail,
+  newDataBusinessName,
+  surveyData,
+  surveyCompleted,
+  surveyDeclined,
+  surveyAnswers,
+  draftSaveRetry,
+])
+
+  // Freeze the request for retries and block double clicks synchronously.
+  const handleStartCall = useCallback(async (formData: CallFormData) => {
+    if (!user || attempt || startInFlight.current || detailsStatus !== 'ready') return
+    startInFlight.current = true
+    setIsCalling(true)
+    setCallError(null)
+    try {
+      if (!pendingStart.current) {
+        pendingStart.current = {
+          ...formData,
+          dialedExtension: formData.dialedExtension?.trim() || undefined,
+          idempotencyKey: createRequestKey(),
+        }
+      }
+      const request = pendingStart.current
+      const result = await api.calls.create(request)
+      setAttempt({
+        ...result,
+        campaign_id: request.campaignId,
+        client_id: request.clientId,
+        contact_id: request.contactId,
+        assignment_id: request.assignmentId,
+        dialed_number: request.dialedNumber,
+        dialed_extension: request.dialedExtension ?? null,
+        state: 'open',
+      })
+      pendingStart.current = null
+      setSelectedContactPersonId(null)
+      setSelectedPhone(null)
+    } catch (error: unknown) {
+      // A validation rejection did not create a call, so allow correcting its data.
+      if (error instanceof ApiError && (error.status === 400 || error.status === 422)) {
+        pendingStart.current = null
+      }
+      setCallError(error instanceof Error ? error.message : 'Error al iniciar la llamada')
+    } finally {
+      startInFlight.current = false
+      setIsCalling(false)
+    }
+  }, [user, 
+      attempt, 
+      detailsStatus,
+      draftStatus,
+      surveyStatus
+    ])
 
   // Handle closing a call
   const handleCloseCall = useCallback(async () => {
-    if (!attempt || !user) return
+    if (!attempt || !user || closeInFlight.current) return
+    if (draftStatus !== 'ready') {
+      setCloseError('Espera a que se compruebe el borrador de la llamada.')
+      return
+    }
+    if (detailsStatus !== 'ready') {
+      setCloseError('Espera a que se carguen los datos y las canalizaciones.')
+      return
+    }
+
+    if (surveyStatus !== 'ready') {
+      setCloseError(
+        surveyStatus === 'loading'
+          ? 'Espera a que termine la consulta de la encuesta.'
+          : 'No se pudo consultar la encuesta. El cierre no se ha enviado.'
+      )
+      return
+    }
 
     setCloseError(null)
 
@@ -251,6 +479,15 @@ const MakeCall: React.FC = () => {
       return
     }
 
+    if (surveyData && !surveyDeclined) {
+      const errors = validateSurvey(surveyData.questions, surveyAnswers)
+      if (!surveyCompleted || Object.keys(errors).length > 0) {
+        setSurveyErrors(errors)
+        setSurveyCompleted(false)
+        setCloseError('Completa la encuesta antes de cerrar la llamada.')
+        return
+      }
+    }
     const includeSurvey = surveyCompleted || surveyDeclined
 
     if (includeSurvey && !surveyData) {
@@ -261,6 +498,12 @@ const MakeCall: React.FC = () => {
     const phone = newDataPhone?.trim() || undefined
     const email = newDataEmail?.trim() || undefined
     const businessName = newDataBusinessName?.trim() || undefined
+
+    const changedBusinessName = businessName !== undefined && businessName !== contactDetail?.client.razon_social
+    if ((phone || email || businessName) && !changedBusinessName && selectedChannelCode !== 'NUEVOS_DATOS') {
+      setCloseError('Selecciona NUEVOS_DATOS para actualizar teléfono o correo.')
+      return
+    }
 
     const closeData: Parameters<typeof api.calls.close>[1] = {
       channelCode: selectedChannelCode,
@@ -281,7 +524,7 @@ const MakeCall: React.FC = () => {
         declined: surveyDeclined,
         answers: surveyDeclined
           ? []
-          : surveyAnswers.map(answer => ({
+          : surveyAnswers.filter(answer => answer.optionId !== null || answer.answerText?.trim()).map(answer => ({
               questionId: answer.questionId,
               optionId: answer.optionId ?? undefined,
               answerText: answer.answerText?.trim() || undefined,
@@ -289,14 +532,20 @@ const MakeCall: React.FC = () => {
       }
     }
 
+    closeInFlight.current = true
     setIsClosing(true)
 
     try {
-      const result = await executeApiCall(() =>
-        api.calls.close(attempt.attempt_id, closeData)
-      )
+      const result = await api.calls.close(attempt.attempt_id, closeData)
 
       if (result) {
+        restoredDraftKey.current = null
+
+        try{
+          removeCallDraft(user.id, attempt.attempt_id)
+        } catch {
+          console.warn('La llamada se cerró, pero no se pudo elimnar el borrador local.')
+        }
         setAttempt(null)
         setSurveyData(null)
         setSelectedChannelCode(null)
@@ -308,16 +557,35 @@ const MakeCall: React.FC = () => {
         setNewDataPhone(null)
         setNewDataEmail(null)
         setNewDataBusinessName(null)
-        setIdempotencyKey(null) // Clear the idempotencyKey after successful close
-        setIsClosing(false)
-        // Optionally, navigate back to contact list or show success
+        pendingStart.current = null
+        navigate('/contactos', { replace: true, state: null })
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
+      setCloseError(
+        e instanceof Error ? e.message : 'Error al cerrar la llamada'
+      )
+    } finally {
+      closeInFlight.current = false
       setIsClosing(false)
-      setCloseError(e.message || 'Error al cerrar la llamada')
     }
-  }, [attempt, user, executeApiCall, selectedChannelCode, notes, surveyData, surveyCompleted, surveyDeclined, surveyAnswers, surveyErrors, newDataPhone, newDataEmail, newDataBusinessName])
-
+  }, [
+    attempt,
+    user,
+    draftStatus,
+    surveyStatus,
+    selectedChannelCode,
+    notes,
+    surveyData,
+    surveyCompleted,
+    surveyDeclined,
+    surveyAnswers,
+    newDataPhone,
+    newDataEmail,
+    newDataBusinessName,
+    detailsStatus,
+    contactDetail,
+    navigate,
+  ])
   // Handle selecting a contact person
   const handleSelectContactPerson = useCallback((contactId: number | null) => {
     setSelectedContactPersonId(contactId)
@@ -334,9 +602,81 @@ const MakeCall: React.FC = () => {
   const handleSelectChannel = useCallback((code: string | null) => {
     setSelectedChannelCode(code)
   }, [])
+  if (user && openAttemptStatus === 'loading') {
+  return (
+    <div className="text-center py-8">
+      Comprobando si tienes una llamada abierta...
+    </div>
+  )
+}
+
+  if (user && openAttemptStatus === 'error') {
+    return (
+      <div className="space-y-4 p-6">
+        <p role="alert">
+          No se pudo comprobar si tienes una llamada abierta.
+          Reintenta antes de iniciar otro registro.
+        </p>
+
+        <button
+          type="button"
+          onClick={() => {
+            setOpenAttemptStatus('loading')
+            setOpenAttemptRetry(value => value + 1)
+          }}
+          className="rounded bg-indigo-600 px-4 py-2 text-white"
+        >
+          Reintentar
+        </button>
+      </div>
+    )
+  }
+
+  const availablePhones = (contactDetail?.phones ?? []).filter(phone => phone.contact_id === selectedContactPersonId)
+
+  const currentContactId =
+  attempt?.contact_id ?? selectedContactPersonId
+
+  const contactEmails = (contactDetail?.emails ?? []).filter(
+    email => email.contact_id === currentContactId
+  )
+
+  const contactInformation = (
+    <div className="my-4 space-y-2 rounded-md bg-gray-50 p-4">
+      <p>
+        <span className="font-medium">Sucursal: </span>
+        {contactDetail?.client.sucursal || 'Sin sucursal registrada'}
+      </p>
+
+      <div>
+        <span className="font-medium">Correo del contacto: </span>
+
+        {contactEmails.length > 0 ? (
+          <ul className="mt-1 space-y-1">
+            {contactEmails.map(email => (
+              <li key={email.email_id} className="break-words">
+                <a
+                  href={`mailto:${email.email}`}
+                  className="text-indigo-700 underline"
+                >
+                  {email.email}
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <span>
+            {currentContactId == null
+              ? 'Selecciona una persona de contacto'
+              : 'Sin correo registrado'}
+          </span>
+        )}
+      </div>
+    </div>
+  )
 
   // Render loading state
-  if (loading && !attempt && !state) {
+  if (detailsStatus === 'loading' && !attempt && state) {
     return <div className="text-center py-8">Cargando...</div>
   }
 
@@ -346,9 +686,18 @@ const MakeCall: React.FC = () => {
   }
 
   // If we don't have the necessary state from ContactList, redirect
-  if (!state) {
+  if (!state && !attempt) {
     return <div className="text-center py-8">Por favor, seleccione un contacto para llamar desde la lista de contactos.</div>
   }
+
+  const detailsFeedback = detailsStatus === 'error' ? (
+    <div role="alert" className="rounded bg-red-50 p-4 text-red-700">
+      <p>{detailsError}</p>
+      <button type="button" onClick={() => setDetailsRetry(value => value + 1)} className="mt-2 underline">
+        Reintentar carga de datos
+      </button>
+    </div>
+  ) : detailsStatus === 'loading' ? <p role="status">Cargando datos y canalizaciones...</p> : null
 
   // If we have an open attempt, show the ongoing call UI
   if (attempt) {
@@ -368,6 +717,72 @@ const MakeCall: React.FC = () => {
             </p>
           </div>
 
+        {surveyStatus === 'loading' && (
+          <p role="status" className="mb-4 text-sm text-gray-600">
+            Consultando la encuesta de la campaña…
+          </p>
+        )}
+
+        {surveyStatus === 'error' && (
+          <div
+            role="alert"
+            className="mb-4 rounded-md bg-red-50 p-4 text-red-700"
+          >
+            <p>
+              No se pudo consultar la encuesta. La llamada sigue abierta.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                setCloseError(null)
+                setSurveyStatus('loading')
+                setSurveyRetry(previous => previous + 1)
+              }}
+              className="mt-3 rounded-md border border-red-700 px-3 py-2"
+            >
+              Reintentar consulta
+            </button>
+          </div>
+        )}
+
+        {draftStatus === 'loading' && (
+          <p role="status">Preparando la captura y comprobando el borrador...</p>
+        )}
+
+        {draftStatus === 'error' && (
+          <div role="alert" className="mb-4 rounded bg-red-50 p-4 text-red-700">
+            <p>{draftError}</p>
+            <button
+              type="button"
+              onClick={() => setDraftRetry(value => value + 1)}
+              className="mt-2 underline"
+            >
+              Reintentar recuperación
+            </button>
+          </div>
+        )}
+
+          {detailsFeedback}
+          {draftSaveError && (
+            <div role="alert" className="mb-4 rounded bg-amber-50 p-4 text-amber-900">
+              <p>{draftSaveError}</p>
+
+              <button
+                type="button"
+                disabled={isClosing}
+                onClick={() => setDraftSaveRetry(value => value + 1)}
+                className="mt-2 underline"
+              >
+                Reintentar guardado del borrador
+              </button>
+            </div>
+          )}
+
+          <fieldset disabled={isClosing || draftStatus !== 'ready'}
+          className="min-w-0"
+          >
+          {contactDetail && contactInformation}
           {/* Survey section if exists and not completed */}
           {surveyData && !surveyCompleted && (
             <div className="mb-6">
@@ -425,7 +840,7 @@ const MakeCall: React.FC = () => {
                                 />
                                 <div className="ml-3">
                                   <div className="font-medium text-gray-700">{option.option_text}</div>
-                                  {option.requires_reason && (
+                                  {option.requires_reason && surveyAnswers.find(a => a.questionId === question.question_id)?.optionId === option.option_id && (
                                     <div className="mt-2">
                                       <textarea
                                         value={surveyAnswers.find(a => a.questionId === question.question_id)?.answerText || ''}
@@ -485,40 +900,9 @@ const MakeCall: React.FC = () => {
                     <div className="mt-4">
                       <button
                         onClick={async () => {
-                          // Validar respuestas antes de continuar
-                          let hasError = false;
-                          const newErrors: Record<number, string> = {};
-
-                          for (const question of surveyData.questions) {
-                            const answer = surveyAnswers.find(a => a.questionId === question.question_id);
-
-                            if (question.required) {
-                              if (question.question_type === 'single_select' && (!answer || answer.optionId === null)) {
-                                newErrors[question.question_id] = 'Esta pregunta es obligatoria';
-                                hasError = true;
-                              } else if (question.question_type === 'text' && (!answer || !answer.answerText?.trim())) {
-                                newErrors[question.question_id] = 'Esta pregunta es obligatoria';
-                                hasError = true;
-                              }
-
-                              // Validar si se requiere explicación pero no se proporcionó
-                              if (answer && question.question_type === 'single_select' && answer.optionId !== null) {
-                                const selectedOption = question.options.find(o => o.option_id === answer.optionId);
-                                if (selectedOption?.requires_reason && (!answer.answerText || !answer.answerText.trim())) {
-                                  newErrors[question.question_id] = 'Esta opción requiere una explicación';
-                                  hasError = true;
-                                }
-                              }
-                            }
-                          }
-
-                          if (hasError) {
-                            setSurveyErrors(newErrors);
-                            return;
-                          }
-
-                          // Limpiar errores si todo es válido
-                          setSurveyErrors({});
+                          const newErrors = validateSurvey(surveyData.questions, surveyAnswers)
+                          setSurveyErrors(newErrors)
+                          if (Object.keys(newErrors).length > 0) return
                           setSurveyCompleted(true);
                         }}
                         disabled={isClosing}
@@ -541,8 +925,14 @@ const MakeCall: React.FC = () => {
             </div>
           )}
 
+          {surveyCompleted && (
+            <button type="button" onClick={() => setSurveyCompleted(false)} className="mb-4 text-indigo-700 underline">
+              Revisar respuestas de la encuesta
+            </button>
+          )}
+
           {/* Notes and channel selection */}
-          {!surveyData || surveyCompleted ? (
+          {!surveyData || surveyCompleted || surveyDeclined ? (
             <>
               <div className="mb-6">
                 <h3 className="text-lg font-semibold mb-2">Notas de la llamada</h3>
@@ -557,6 +947,9 @@ const MakeCall: React.FC = () => {
 
               <div className="mb-6">
                 <h3 className="text-lg font-semibold mb-2">Actualización de datos</h3>
+                <p className="mb-3 text-sm text-gray-600">
+                  Para cambiar teléfono o correo selecciona NUEVOS_DATOS. Cambiar la razón social envía el contacto a Blacklist.
+                </p>
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -632,31 +1025,21 @@ const MakeCall: React.FC = () => {
 
           {/* Call actions */}
           <div className="flex justify-end space-x-3">
-            {!surveyData || surveyCompleted ? (
+            {!surveyData || surveyCompleted || surveyDeclined ? (
               <button
                 onClick={handleCloseCall}
-                disabled={isClosing || !selectedChannelCode}
+                disabled={
+                  isClosing ||
+                  !selectedChannelCode ||
+                  surveyStatus !== 'ready' || detailsStatus !== 'ready'
+                }
                 className="w-auto flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
               >
                 {isClosing ? 'Cerrando llamada...' : 'Cerrar llamada'}
               </button>
             ) : null}
-            <button
-              onClick={() => {
-                // Reset call state (abandon)
-                setAttempt(null)
-                setSurveyData(null)
-                setSelectedChannelCode(null)
-                setNotes('')
-                setSurveyCompleted(false)
-                setIdempotencyKey(null)
-                // Note: we do not delete the attempt from backend, just abandon tracking
-              }}
-              className="w-auto flex justify-center py-2 px-4 border border-gray-300 text-sm font-medium rounded-md hover:bg-gray-50"
-            >
-              Abandonar llamada
-            </button>
           </div>
+          </fieldset>
         </div>
       </div>
     )
@@ -678,12 +1061,15 @@ const MakeCall: React.FC = () => {
         </div>
       </div>
 
+      {detailsFeedback}
+      {contactDetail && contactInformation}
       {/* Form to start call */}
       {contactDetail && (
         <>
           <div className="bg-white rounded-lg shadow p-6">
             <h3 className="text-lg font-semibold mb-4">Seleccione persona de contacto y teléfono</h3>
 
+            <fieldset disabled={isCalling || pendingStart.current !== null}>
             {/* Contact person selection */}
             {contactDetail.contacts.length > 0 ? (
               <div className="mb-4">
@@ -701,7 +1087,7 @@ const MakeCall: React.FC = () => {
                         className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
                       />
                       <div className="ml-3">
-                        <div className="font-medium text-gray-700">{person.nombre || 'N/A'}</div>
+                        <div className="font-medium text-gray-700">{person.nombre?.trim() || 'Contacto sin nombre registrado'}</div>
                         {person.ejecutivo && (
                           <div className="text-sm text-gray-500">Ejecutivo: {person.ejecutivo}</div>
                         )}
@@ -722,20 +1108,15 @@ const MakeCall: React.FC = () => {
                     Teléfono
                   </label>
                   {/* Filter phones for the selected contact person */}
-                  {/*
-                    Note: In a real implementation, we would need to know which phones belong to which contact person.
-                    The current contact detail structure does not link phones to specific contact persons.
-                    We assume all phones are for the contact (not per person). This is a simplification.
-                  */}
-                  {contactDetail.phones.length > 0 ? (
+                  {availablePhones.length > 0 ? (
                     <div className="space-y-2">
-                      {contactDetail.phones.map((phone) => (
+                      {availablePhones.map((phone) => (
                         <div key={phone.phone_id} className="flex items-center">
                           <input
                             type="radio"
                             value={phone.phone_id}
                             checked={selectedPhone?.phone_id === phone.phone_id}
-                            onChange={(e) => handleSelectPhone((contactDetail.phones.find(p => p.phone_id === Number(e.target.value)) || null))}
+                            onChange={() => handleSelectPhone(phone)}
                             className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
                           />
                           <div className="ml-3">
@@ -756,11 +1137,15 @@ const MakeCall: React.FC = () => {
               </div>
             )}
 
+            </fieldset>
+            {pendingStart.current && !isCalling && (
+              <p className="mt-3 text-sm text-gray-600">Al reintentar se enviarán los mismos datos del intento anterior.</p>
+            )}
             {/* Start call button */}
             <div className="mt-6">
               <button
                 onClick={async () => {
-                  if (!selectedContactPersonId || !selectedPhone) {
+                  if (!state || !selectedContactPersonId || !selectedPhone || selectedPhone.contact_id !== selectedContactPersonId) {
                     alert('Por favor, seleccione una persona de contacto y un teléfono')
                     return
                   }
@@ -791,12 +1176,7 @@ const MakeCall: React.FC = () => {
         </>
       )}
 
-      {/* Error state */}
-      {error && (
-        <div className="bg-red-50 text-red-500 p-4 rounded mb-6">
-          {error}
-        </div>
-      )}
+
     </div>
   )
 }

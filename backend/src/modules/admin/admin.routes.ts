@@ -5,6 +5,8 @@ import { db } from '../../db/kysely.js';
 import { requireRole } from '../../middleware/requireRole.js';
 import { hashPassword } from '../../utils/auth.js';
 import { AppError } from '../../utils/errors.js';
+import { sql } from 'kysely';
+import { startWorkRound } from './rounds.service.js';
 
 const CreateUserSchema = z.object({
   username: z.string().min(3),
@@ -14,6 +16,111 @@ const CreateUserSchema = z.object({
 });
 
 export async function adminRoutes(app: FastifyInstance) {
+    app.get(
+    '/api/admin/rondas/historial',
+    { preHandler: requireRole('admin') },
+    async (request, reply) => {
+      const { campaignId, agentId } = z.object({
+        campaignId: z.coerce.number().int().positive(),
+        agentId: z.coerce.number().int().positive(),
+      }).parse(request.query);
+
+      const rounds = await db
+        .selectFrom('work_rounds')
+        .select([
+          'round_id',
+          'name',
+          'started_at',
+          'ended_at',
+        ])
+        .where('campaign_id', '=', campaignId)
+        .where('agent_id', '=', agentId)
+        .orderBy('started_at', 'desc')
+        .orderBy('round_id', 'desc')
+        .execute();
+
+      return reply.send({ rounds });
+    },
+  );
+    app.post(
+    '/api/admin/rondas',
+    { preHandler: requireRole('admin') },
+    async (request, reply) => {
+      const body = z.object({
+        campaignId: z.number().int().positive(),
+        agentId: z.number().int().positive(),
+        name: z.string().trim().min(1).max(150),
+        expectedRoundId: z.number().int().positive().nullable(),
+      }).parse(request.body);
+
+      const result = await startWorkRound(
+        body,
+        request.session.user!.userId,
+      );
+
+      return reply.status(201).send(result);
+    },
+  );
+    app.get(
+  '/api/admin/rondas/resumen',
+  { preHandler: requireRole('admin') },
+  async (request, reply) => {
+    const { campaignId, agentId } = z.object({
+      campaignId: z.coerce.number().int().positive(),
+      agentId: z.coerce.number().int().positive(),
+    }).parse(request.query);
+
+    const round = await db
+      .selectFrom('work_rounds')
+      .select(['round_id', 'name', 'started_at', 'ended_at'])
+      .where('campaign_id', '=', campaignId)
+      .where('agent_id', '=', agentId)
+      .where('ended_at', 'is', null)
+      .executeTakeFirst();
+
+    const result = await sql<{
+      assigned: number;
+      blocked: number;
+      inactive: number;
+      eligible: number;
+    }>`
+      SELECT
+        COUNT(*)::integer AS assigned,
+        COUNT(*) FILTER (
+          WHERE b.blacklist_id IS NOT NULL
+        )::integer AS blocked,
+        COUNT(*) FILTER (
+          WHERE b.blacklist_id IS NULL AND NOT c.is_active
+        )::integer AS inactive,
+        COUNT(*) FILTER (
+          WHERE b.blacklist_id IS NULL AND c.is_active
+        )::integer AS eligible
+      FROM public.contact_assignments AS a
+      JOIN public.clients AS c
+        ON c.client_id = a.client_id
+      LEFT JOIN public.contact_blacklist AS b
+        ON b.client_id = a.client_id
+        AND b.campaign_id = a.campaign_id
+        AND b.ended_at IS NULL
+      WHERE a.campaign_id = ${campaignId}
+        AND a.agent_id = ${agentId}
+        AND a.ended_at IS NULL
+    `.execute(db);
+
+    const openCall = await db
+      .selectFrom('call_attempts')
+      .select('attempt_id')
+      .where('agent_id', '=', agentId)
+      .where('state', '=', 'open')
+      .executeTakeFirst();
+
+    return reply.send({
+      round: round ?? null,
+      summary: result.rows[0],
+      hasOpenCall: Boolean(openCall),
+    });
+  },
+);
   app.get('/api/admin/users', { preHandler: requireRole('admin') }, async () => ({
     users: await db.selectFrom('users').select(['user_id','username','full_name','role','is_active']).orderBy('full_name').execute(),
   }));

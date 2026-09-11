@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test:db": "node tests/database/test_schema.mjs",
     "bootstrap:admin": "tsx backend/src/scripts/bootstrap-admin.ts",
-    "test:backend": "npm run build && node tests/backend/integration.mjs"
+    "test:backend": "npm run build && node tests/backend/integration.mjs",
+    "test:frontend": "tsx --test tests/frontend/call-flow.test.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^9.3.1",

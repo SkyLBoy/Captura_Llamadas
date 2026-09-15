@@ -166,7 +166,8 @@ export interface ContactBlacklistTable {
   blacklist_id: Generated<number>;
   client_id: number;
   campaign_id: number;
-  attempt_id: number;
+  attempt_id: Generated<number | null>;
+  import_detail_id: Generated<number | null>;
   reason: string;
   started_at: Generated<TimestampTz>;
   ended_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
@@ -352,7 +353,18 @@ export interface VwEstadosEncuestaTable {
   cantidad: string;
 }
 
+export interface ContactFinalizationsTable {
+  attempt_id: number;
+  client_id: number;
+  campaign_id: number;
+  successful: boolean;
+  survey_completed: boolean;
+  finalized_at: TimestampTz;
+  created_at: Generated<TimestampTz>;
+}
+
 export interface Database {
+  contact_finalizations: ContactFinalizationsTable;
   users: UsersTable;
   campaigns: CampaignsTable;
   dispositions: DispositionsTable;

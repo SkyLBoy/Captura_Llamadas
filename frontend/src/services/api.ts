@@ -107,6 +107,11 @@ export const api = {
     },
   },
   calls: {
+    getHistory: async (params: URLSearchParams, signal?: AbortSignal) => {
+      const response = await fetch(`${API_BASE_URL}/calls/history?${params}`, { credentials: 'include', signal })
+      if (!response.ok) throw new ApiError(response.status, await getErrorMessage(response, 'No se pudo consultar el historial.'))
+      return response.json()
+    },
     getOpen: async () => {
       const response = await fetch(`${API_BASE_URL}/calls/open`, {
         credentials: 'include',
@@ -128,7 +133,7 @@ export const api = {
       contactId: number | null
       dialedNumber: string
       dialedExtension?: string
-    }) => {
+    }): Promise<{ attempt_id: number; call_start: string; state: 'open' | 'closed' }> => {
       const response = await fetch(`${API_BASE_URL}/calls`, {
         method: 'POST',
         headers: {
@@ -346,6 +351,7 @@ export const api = {
           assigned: number
           blocked: number
           inactive: number
+        finalized: number
           eligible: number
         }
         hasOpenCall: boolean
@@ -427,6 +433,17 @@ export const api = {
       }
 
       return response.json()
+    },
+    getFinalizedContacts: async (campaignId: number | null, search: string, page: number) => {
+      const params = new URLSearchParams({search, page: String(page)})
+      if (campaignId !== null) params.set('campaignId', String(campaignId))
+      const response = await fetch(`${API_BASE_URL}/admin/contactos-finalizados?${params}`, {credentials: 'include'})
+      if (!response.ok) throw new Error(await getErrorMessage(response, 'No se pudieron consultar los contactos finalizados.'))
+      return response.json() as Promise<{
+        total: number
+        contacts: { client_id: number; campaign_id: number; clave: string; razon_social: string | null;
+          campaign: string; successful: boolean; survey_completed: boolean; finalized_at: string; attempt_ids: number[] }[]
+      }>
     },
     getBlacklist: async (campaignId: number | null = null) => {
       let url = `${API_BASE_URL}/admin/blacklist`

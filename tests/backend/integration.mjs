@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { PGlite } from '../../tools/pglite/package/dist/index.js';
 Object.assign(process.env,{NODE_ENV:'test',PGHOST:'localhost',PGPORT:'5432',PGDATABASE:'isolated_test',PGUSER:'test',PGPASSWORD:'test',SESSION_SECRET:'isolated-test-secret-32-characters-long'});
 const engine=new PGlite();
@@ -70,12 +71,13 @@ await test('Survey finishes before call end and repeated close cannot overwrite'
  assert.equal((await engine.query(`SELECT a.call_end>=s.completed_at AS valid FROM call_attempts a JOIN call_surveys s USING(attempt_id) WHERE attempt_id=$1`,[call.attempt_id])).rows[0].valid,true);
  await assert.rejects(closeCall({attemptId:call.attempt_id,agentId:agent.user_id,channelCode:'BLACKLIST'},agent.user_id));
 });
-await test('Report contains campaign history, raw surveys, hidden data and PNG graphs',async()=>{
+await test('Report contains campaign history, raw surveys, hidden data and native charts',async()=>{
  const now=new Date();const {buffer}=await generateMonthlyClosing({campaignId:sil.campaign_id,year:now.getUTCFullYear(),month:now.getUTCMonth()+1});
  const report=new ExcelJS.Workbook();await report.xlsx.load(buffer);
- for(const name of ['CONCENTRADO','SILIMEX','ENCUESTAS','RESULTADOS ENCUESTA']) assert.ok(report.getWorksheet(name),name);
- assert.equal(report.getWorksheet('DATOS ENCUESTA').state,'hidden');assert.equal(report.getWorksheet('RESULTADOS ENCUESTA').getImages().length,5);
- assert.equal(report.getWorksheet('ENCUESTAS').rowCount,2);
+ for(const name of ['CONCENTRADO','SILIMEX','ENCUESTA','RESULTADOS ENCUESTA']) assert.ok(report.getWorksheet(name),name);
+ assert.equal(report.getWorksheet('Hoja1').state,'hidden');
+ const zip=await JSZip.loadAsync(buffer);assert.equal(Object.keys(zip.files).filter(p=>/^xl\/charts\/chart\d+\.xml$/.test(p)).length,5);
+ assert.equal(report.getWorksheet('ENCUESTA').rowCount,2);
  await fs.writeFile(new URL('./sample-report.xlsx',import.meta.url),buffer);
 });
 await test('Admin classifies channels with actor audit and data changes preserve dialed number',async()=>{

@@ -1,94 +1,22 @@
-import React from 'react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-
-interface NavProps {
-  user: {
-    id: number
-    username: string
-    fullName: string
-    role: string
-  } | null
-}
-
-const Nav: React.FC<NavProps> = ({ user }) => {
+import { useConfirm } from './ui/ConfirmProvider'
+import { useState } from 'react'
+export const adminLinks = [
+  ['/gestion/historial', 'Historial diario'],
+  ['/gestion', 'Resumen'], ['/gestion/contactos-finalizados', 'Finalizados'], ['/gestion/reportes', 'Reportes'], ['/gestion/rondas', 'Rondas de trabajo'], ['/gestion/importar-contactos', 'Importar contactos'], ['/gestion/usuarios', 'Usuarios'], ['/gestion/canalizaciones', 'Canalizaciones'], ['/gestion/blacklist', 'Lista negra'],
+]
+export default function Nav({ user }: { user: { role: string } | null }) {
   const { logout } = useAuth()
+  const navigate = useNavigate()
+  const confirm = useConfirm()
+  const [busy, setBusy] = useState(false)
   if (!user) return null
-
-  const isAgent = user.role === 'agent'
-  const isAdmin = user.role === 'admin'
-
-  return (
-    <>
-      <NavLink
-        to={isAgent ? '/contactos' : '/gestion'}
-        end
-        className={({ isActive }: { isActive: boolean }) =>
-          `rounded-md px-3 py-2 text-sm font-medium ${
-            isActive
-              ? 'bg-white text-indigo-600 ring-1 ring-inset ring-indigo-600'
-              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-          }`}
-        aria-current="page"
-      >
-        {isAgent ? 'Mis Contactos' : 'Gestión'}
-      </NavLink>
-
-      {isAdmin && (
-        <>
-          <NavLink
-            to="/gestion/usuarios"
-            className={({ isActive }: { isActive: boolean }) =>
-              `rounded-md px-3 py-2 text-sm font-medium ${
-                isActive
-                  ? 'bg-white text-indigo-600 ring-1 ring-inset ring-indigo-600'
-                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-              }`}
-            aria-current="page"
-          >
-            Usuarios
-          </NavLink>
-
-          <NavLink
-            to="/gestion/canalizaciones"
-            className={({ isActive }: { isActive: boolean }) =>
-              `rounded-md px-3 py-2 text-sm font-medium ${
-                isActive
-                  ? 'bg-white text-indigo-600 ring-1 ring-inset ring-indigo-600'
-                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-              }`}
-            aria-current="page"
-          >
-            Canalizaciones
-          </NavLink>
-
-          <NavLink
-            to="/gestion/blacklist"
-            className={({ isActive }: { isActive: boolean }) =>
-              `rounded-md px-3 py-2 text-sm font-medium ${
-                isActive
-                  ? 'bg-white text-indigo-600 ring-1 ring-inset ring-indigo-600'
-                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-              }`}
-            aria-current="page"
-          >
-            Lista Negra
-          </NavLink>
-        </>
-      )}
-
-      <button
-        onClick={async () => {
-          await logout()
-          window.location.href = '/login'
-        }}
-        className="ml-4 flex h-9 items-center px-3 justify-center text-sm font-medium transition-colors
-                   text-gray-500 bg-white border border-gray-300 rounded-md hover:text-gray-800 hover:bg-gray-50"
-      >
-        Cerrar sesión
-      </button>
-    </>
-  )
+  const links = user.role === 'admin' ? adminLinks : [['/contactos', 'Contactos de campaña'], ['/llamar', 'Mesa de llamada'], ['/historial', 'Historial diario']]
+  return <><div className="nav-links">{links.map(([to,label]) => <NavLink key={to} to={to} end className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>{label}</NavLink>)}</div><button className="logout-button" disabled={busy} onClick={async () => {
+    if (!await confirm({ title: 'Cerrar sesión', message: 'Si tienes una llamada abierta, seguirá abierta y podrás recuperarla al volver a ingresar.', action: 'Cerrar sesión' })) return
+    setBusy(true)
+    await logout()
+    navigate('/login', { replace: true })
+  }}>Cerrar sesión</button></>
 }
-
-export default Nav

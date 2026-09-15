@@ -3,9 +3,12 @@ import { useAuth } from '../contexts/AuthContext'
 import { createRequestKey, validateSurvey, type SurveyAnswer, type SurveyQuestion } from '../utils/callValidation'
 import { api, ApiError } from '../services/api'
 import { useLocation, useNavigate, Navigate } from 'react-router-dom'
+import CallWorkspace from '../components/calls/CallWorkspace'
+import { Feedback } from '../components/ui/Feedback'
+import { Button } from '../components/ui/Button'
 import { loadCallDraft, saveCallDraft, removeCallDraft} from '../utils/callDraft'
 
-type CallFormData = {
+export type CallFormData = {
   campaignId: number
   assignmentId: number
   clientId: number
@@ -20,7 +23,7 @@ type ContactPerson = {
   ejecutivo: string | null
 }
 
-type PhoneNumber = {
+export type PhoneNumber = {
   phone_id: number
   contact_id: number
   type: 'main' | 'reference1' | 'reference2' | 'mobile' | 'other'
@@ -34,7 +37,7 @@ type EmailAddress = {
   email: string
 }
 
-type ContactDetail = {
+export type ContactDetail = {
   client: {
     client_id: number
     clave: string
@@ -51,12 +54,12 @@ type SurveyVersion = {
   version_name: string
 }
 
-type SurveyData = {
+export type SurveyData = {
   version: SurveyVersion
   questions: SurveyQuestion[]
 }
 
-type Channel = {
+export type Channel = {
   channel_id: number
   campaign_id: number
   code: string
@@ -65,7 +68,7 @@ type Channel = {
   is_active: boolean
 }
 
-type CallAttempt = {
+export type CallAttempt = {
   attempt_id: number
   campaign_id: number
   client_id: number
@@ -103,6 +106,8 @@ const MakeCall: React.FC = () => {
   const [surveyRetry, setSurveyRetry] = useState(0) // to trigger re-fetch of survey if needed
   const [contactDetail, setContactDetail] = useState<ContactDetail | null>(null)
   const [channels, setChannels] = useState<Channel[]>([])
+  const [dispositions, setDispositions] = useState<{ disposition_id: number; code: string; description: string }[]>([])
+  const [campaignName, setCampaignName] = useState('')
 
   // Form state for starting a call
   const [selectedContactPersonId, setSelectedContactPersonId] = useState<number | null>(null)
@@ -197,6 +202,7 @@ useEffect(() => {
           : null
 
       if (!cancelled) {
+        setCampaignName(campaign.name)
         setSurveyData(result)
         setSurveyStatus('ready')
       }
@@ -230,13 +236,16 @@ useEffect(() => {
     setSelectedChannelCode(null)
     const loadDetails = async () => {
       try {
-        const [detail, catalog] = await Promise.all([
+        const [detail, catalog, campaigns] = await Promise.all([
           api.contacts.getByClient(clientId, campaignId),
           api.catalogs.getByCampaign(campaignId),
+          api.campaigns.getAll().catch(() => null),
         ])
         if (!cancelled) {
           setContactDetail(detail)
-          setChannels(catalog.channels ?? [])
+          setChannels((catalog.channels ?? []).filter((channel: Channel) => channel.is_active && channel.disposition_id !== null))
+          setDispositions(catalog.dispositions ?? [])
+          setCampaignName(campaigns?.campaigns?.find((item: { campaign_id: number }) => item.campaign_id === campaignId)?.name || '')
           setDetailsStatus('ready')
         }
       } catch (error: unknown) {
@@ -421,6 +430,12 @@ useEffect(() => {
       }
       const request = pendingStart.current
       const result = await api.calls.create(request)
+      if (result.state === 'closed') {
+        // A delayed retry may arrive after another tab has closed this call.
+        pendingStart.current = null
+        navigate('/contactos', { replace: true, state: null })
+        return
+      }
       setAttempt({
         ...result,
         campaign_id: request.campaignId,
@@ -429,7 +444,7 @@ useEffect(() => {
         assignment_id: request.assignmentId,
         dialed_number: request.dialedNumber,
         dialed_extension: request.dialedExtension ?? null,
-        state: 'open',
+        state: result.state,
       })
       pendingStart.current = null
       setSelectedContactPersonId(null)
@@ -448,7 +463,8 @@ useEffect(() => {
       attempt, 
       detailsStatus,
       draftStatus,
-      surveyStatus
+      surveyStatus,
+      navigate
     ])
 
   // Handle closing a call
@@ -602,595 +618,29 @@ useEffect(() => {
   const handleSelectChannel = useCallback((code: string | null) => {
     setSelectedChannelCode(code)
   }, [])
-  if (user && openAttemptStatus === 'loading') {
-  return (
-    <div className="text-center py-8">
-      Comprobando si tienes una llamada abierta...
-    </div>
-  )
+  if (!user) return <Navigate to="/login" replace />
+  if (openAttemptStatus === 'loading') return <Feedback>Comprobando si tienes una llamada abierta…</Feedback>
+  if (openAttemptStatus === 'error') return <Feedback tone="error">No se pudo comprobar si tienes una llamada abierta. <Button onClick={() => setOpenAttemptRetry(value => value + 1)}>Reintentar</Button></Feedback>
+  if (!state && !attempt) return <Feedback>Selecciona un contacto desde la lista para preparar una llamada. <Button onClick={() => navigate('/contactos')}>Ir a contactos</Button></Feedback>
+  const ready = draftStatus === 'ready' && detailsStatus === 'ready' && surveyStatus === 'ready'
+  const feedback = <>
+    {detailsStatus === 'loading' && <Feedback>Cargando los datos y las canalizaciones…</Feedback>}
+    {detailsStatus === 'error' && <Feedback tone="error">{detailsError} <Button onClick={() => setDetailsRetry(v => v + 1)}>Reintentar carga de datos</Button></Feedback>}
+    {attempt && surveyStatus === 'loading' && <Feedback>Consultando la encuesta de la campaña…</Feedback>}
+    {attempt && surveyStatus === 'error' && <Feedback tone="error">No se pudo consultar la encuesta. La llamada sigue abierta. <Button onClick={() => { setCloseError(null); setSurveyRetry(v => v + 1) }}>Reintentar consulta</Button></Feedback>}
+    {attempt && draftStatus === 'loading' && <Feedback>Preparando la captura y comprobando el borrador…</Feedback>}
+    {attempt && draftStatus === 'error' && <Feedback tone="error">{draftError} <Button onClick={() => setDraftRetry(v => v + 1)}>Reintentar recuperación</Button></Feedback>}
+    {draftSaveError && <Feedback tone="warning">{draftSaveError} <Button disabled={isClosing} onClick={() => setDraftSaveRetry(v => v + 1)}>Reintentar guardado del borrador</Button></Feedback>}
+  </>
+  return <CallWorkspace
+    attempt={attempt} detail={contactDetail} campaignName={campaignName} campaignId={attempt?.campaign_id ?? state?.campaignId} state={state}
+    contactId={selectedContactPersonId} phone={selectedPhone} selectContact={handleSelectContactPerson} selectPhone={handleSelectPhone}
+    start={handleStartCall} pendingStart={pendingStart.current !== null} starting={isCalling} startError={callError}
+    survey={surveyData} completed={surveyCompleted} setCompleted={setSurveyCompleted} declined={surveyDeclined} setDeclined={setSurveyDeclined}
+    answers={surveyAnswers} setAnswers={setSurveyAnswers} errors={surveyErrors} setErrors={setSurveyErrors}
+    channels={channels} dispositions={dispositions} channelCode={selectedChannelCode} selectChannel={handleSelectChannel}
+    notes={notes} setNotes={setNotes} newPhone={newDataPhone} setNewPhone={setNewDataPhone} newEmail={newDataEmail} setNewEmail={setNewDataEmail} newBusiness={newDataBusinessName} setNewBusiness={setNewDataBusinessName}
+    close={handleCloseCall} closing={isClosing} closeError={closeError} ready={ready} detailsReady={detailsStatus === 'ready'} elapsed={elapsedSeconds} feedback={feedback} draftSaveError={draftSaveError}
+  />
 }
-
-  if (user && openAttemptStatus === 'error') {
-    return (
-      <div className="space-y-4 p-6">
-        <p role="alert">
-          No se pudo comprobar si tienes una llamada abierta.
-          Reintenta antes de iniciar otro registro.
-        </p>
-
-        <button
-          type="button"
-          onClick={() => {
-            setOpenAttemptStatus('loading')
-            setOpenAttemptRetry(value => value + 1)
-          }}
-          className="rounded bg-indigo-600 px-4 py-2 text-white"
-        >
-          Reintentar
-        </button>
-      </div>
-    )
-  }
-
-  const availablePhones = (contactDetail?.phones ?? []).filter(phone => phone.contact_id === selectedContactPersonId)
-
-  const currentContactId =
-  attempt?.contact_id ?? selectedContactPersonId
-
-  const contactEmails = (contactDetail?.emails ?? []).filter(
-    email => email.contact_id === currentContactId
-  )
-
-  const contactInformation = (
-    <div className="my-4 space-y-2 rounded-md bg-gray-50 p-4">
-      <p>
-        <span className="font-medium">Sucursal: </span>
-        {contactDetail?.client.sucursal || 'Sin sucursal registrada'}
-      </p>
-
-      <div>
-        <span className="font-medium">Correo del contacto: </span>
-
-        {contactEmails.length > 0 ? (
-          <ul className="mt-1 space-y-1">
-            {contactEmails.map(email => (
-              <li key={email.email_id} className="break-words">
-                <a
-                  href={`mailto:${email.email}`}
-                  className="text-indigo-700 underline"
-                >
-                  {email.email}
-                </a>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <span>
-            {currentContactId == null
-              ? 'Selecciona una persona de contacto'
-              : 'Sin correo registrado'}
-          </span>
-        )}
-      </div>
-    </div>
-  )
-
-  // Render loading state
-  if (detailsStatus === 'loading' && !attempt && state) {
-    return <div className="text-center py-8">Cargando...</div>
-  }
-
-  // Redirect if not authenticated
-  if (!user) {
-    return <Navigate to="/login" replace />
-  }
-
-  // If we don't have the necessary state from ContactList, redirect
-  if (!state && !attempt) {
-    return <div className="text-center py-8">Por favor, seleccione un contacto para llamar desde la lista de contactos.</div>
-  }
-
-  const detailsFeedback = detailsStatus === 'error' ? (
-    <div role="alert" className="rounded bg-red-50 p-4 text-red-700">
-      <p>{detailsError}</p>
-      <button type="button" onClick={() => setDetailsRetry(value => value + 1)} className="mt-2 underline">
-        Reintentar carga de datos
-      </button>
-    </div>
-  ) : detailsStatus === 'loading' ? <p role="status">Cargando datos y canalizaciones...</p> : null
-
-  // If we have an open attempt, show the ongoing call UI
-  if (attempt) {
-    return (
-      <div className="space-y-6">
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-xl font-bold mb-4">
-            Llamada en curso{(attempt.state === 'open' ? '' : ' (cerrada)')}
-          </h2>
-          <div className="mb-4">
-            <p className="text-gray-600">
-              Iniciada: <span className="font-medium">{new Date(attempt.call_start).toLocaleString()}</span>
-            </p>
-            <p className="text-gray-600">
-              Duración: <span className="font-medium">{formatTime(elapsedSeconds)}</span>
-              <span className="text-sm text-gray-500">(informativo)</span>
-            </p>
-          </div>
-
-        {surveyStatus === 'loading' && (
-          <p role="status" className="mb-4 text-sm text-gray-600">
-            Consultando la encuesta de la campaña…
-          </p>
-        )}
-
-        {surveyStatus === 'error' && (
-          <div
-            role="alert"
-            className="mb-4 rounded-md bg-red-50 p-4 text-red-700"
-          >
-            <p>
-              No se pudo consultar la encuesta. La llamada sigue abierta.
-            </p>
-
-            <button
-              type="button"
-              onClick={() => {
-                setCloseError(null)
-                setSurveyStatus('loading')
-                setSurveyRetry(previous => previous + 1)
-              }}
-              className="mt-3 rounded-md border border-red-700 px-3 py-2"
-            >
-              Reintentar consulta
-            </button>
-          </div>
-        )}
-
-        {draftStatus === 'loading' && (
-          <p role="status">Preparando la captura y comprobando el borrador...</p>
-        )}
-
-        {draftStatus === 'error' && (
-          <div role="alert" className="mb-4 rounded bg-red-50 p-4 text-red-700">
-            <p>{draftError}</p>
-            <button
-              type="button"
-              onClick={() => setDraftRetry(value => value + 1)}
-              className="mt-2 underline"
-            >
-              Reintentar recuperación
-            </button>
-          </div>
-        )}
-
-          {detailsFeedback}
-          {draftSaveError && (
-            <div role="alert" className="mb-4 rounded bg-amber-50 p-4 text-amber-900">
-              <p>{draftSaveError}</p>
-
-              <button
-                type="button"
-                disabled={isClosing}
-                onClick={() => setDraftSaveRetry(value => value + 1)}
-                className="mt-2 underline"
-              >
-                Reintentar guardado del borrador
-              </button>
-            </div>
-          )}
-
-          <fieldset disabled={isClosing || draftStatus !== 'ready'}
-          className="min-w-0"
-          >
-          {contactDetail && contactInformation}
-          {/* Survey section if exists and not completed */}
-          {surveyData && !surveyCompleted && (
-            <div className="mb-6">
-              <h3 className="text-lg font-semibold mb-2">Encuesta de satisfacción</h3>
-              <div className="bg-gray-50 p-4 rounded">
-                <div className="flex justify-between items-start mb-3">
-                  <span>Cliente respondió la encuesta</span>
-                  <div className="flex space-x-2">
-                    <label className="flex items-center">
-                      <input
-                        type="checkbox"
-                        checked={surveyDeclined}
-                        onChange={(e) => setSurveyDeclined(e.target.checked)}
-                        className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300"
-                      />
-                      <span className="ml-2 text-sm font-medium">Cliente no respondió</span>
-                    </label>
-                  </div>
-                </div>
-
-                {!surveyDeclined && (
-                  <>
-                    {surveyData.questions.map((question) => (
-                      <div key={question.question_id} className="mb-4">
-                        <div className="font-medium text-gray-700">
-                          {question.question_text}
-                          {question.required && <span className="ml-1 text-red-500">*</span>}
-                        </div>
-                        {question.question_type === 'single_select' && (
-                          <div className="mt-2 space-y-2">
-                            {question.options.map((option) => (
-                              <div key={option.option_id} className="flex items-start">
-                                <input
-                                  type="radio"
-                                  checked={surveyAnswers.find(a => a.questionId === question.question_id)?.optionId === option.option_id}
-                                  onChange={(e) => {
-                                    const answerValue = e.target.checked ? Number(e.target.value) : null;
-                                    setSurveyAnswers(prev => {
-                                      const updatedAnswers = prev.filter(a => a.questionId !== question.question_id);
-                                      if (answerValue !== null) {
-                                        return [...updatedAnswers, { questionId: question.question_id, optionId: answerValue, answerText: null }];
-                                      }
-                                      return updatedAnswers;
-                                    });
-
-                                    // Limpiar errores cuando se selecciona una opción
-                                    setSurveyErrors(prev => {
-                                      const newErrors = {...prev};
-                                      delete newErrors[question.question_id];
-                                      return newErrors;
-                                    });
-                                  }}
-                                  value={option.option_id}
-                                  className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-                                />
-                                <div className="ml-3">
-                                  <div className="font-medium text-gray-700">{option.option_text}</div>
-                                  {option.requires_reason && surveyAnswers.find(a => a.questionId === question.question_id)?.optionId === option.option_id && (
-                                    <div className="mt-2">
-                                      <textarea
-                                        value={surveyAnswers.find(a => a.questionId === question.question_id)?.answerText || ''}
-                                        onChange={(e) => {
-                                          setSurveyAnswers(prev => {
-                                            const updatedAnswers = prev.filter(a => a.questionId !== question.question_id);
-                                            const currentOptionId =
-                                              prev.find(a => a.questionId === question.question_id)?.optionId ?? null;
-                                            return [...updatedAnswers, {
-                                              questionId: question.question_id,
-                                              optionId: currentOptionId,
-                                              answerText: e.target.value || null
-                                            }];
-                                          });
-                                        }}
-                                        placeholder="Especifique su respuesta..."
-                                        className="w-full p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-                                        rows={2}
-                                      />
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                            {/* Mostrar error si existe */}
-                            {surveyErrors[question.question_id] && (
-                              <p className="text-red-500 text-sm mt-1">{surveyErrors[question.question_id]}</p>
-                            )}
-                          </div>
-                        )}
-                        {question.question_type === 'text' && (
-                          <div className="mt-2">
-                            <textarea
-                              value={surveyAnswers.find(a => a.questionId === question.question_id)?.answerText || ''}
-                              onChange={(e) => {
-                                setSurveyAnswers(prev => {
-                                  const updatedAnswers = prev.filter(a => a.questionId !== question.question_id);
-                                  return [...updatedAnswers, {
-                                    questionId: question.question_id,
-                                    optionId: null,
-                                    answerText: e.target.value || null
-                                  }];
-                                });
-                              }}
-                              placeholder="Escriba su respuesta..."
-                              className="w-full p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-                              rows={3}
-                            />
-                            {/* Mostrar error si existe */}
-                            {surveyErrors[question.question_id] && (
-                              <p className="text-red-500 text-sm mt-1">{surveyErrors[question.question_id]}</p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    <div className="mt-4">
-                      <button
-                        onClick={async () => {
-                          const newErrors = validateSurvey(surveyData.questions, surveyAnswers)
-                          setSurveyErrors(newErrors)
-                          if (Object.keys(newErrors).length > 0) return
-                          setSurveyCompleted(true);
-                        }}
-                        disabled={isClosing}
-                        className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                      >
-                        {isClosing ? 'Guardando encuesta...' : 'Completar encuesta'}
-                      </button>
-                    </div>
-                  </>
-                )}
-
-                {surveyDeclined && (
-                  <div className="mt-4">
-                    <p className="text-gray-600">
-                      El cliente ha indicado que no desea responder la encuesta.
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {surveyCompleted && (
-            <button type="button" onClick={() => setSurveyCompleted(false)} className="mb-4 text-indigo-700 underline">
-              Revisar respuestas de la encuesta
-            </button>
-          )}
-
-          {/* Notes and channel selection */}
-          {!surveyData || surveyCompleted || surveyDeclined ? (
-            <>
-              <div className="mb-6">
-                <h3 className="text-lg font-semibold mb-2">Notas de la llamada</h3>
-                <textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Tomar notas sobre la llamada..."
-                  className="w-full p-3 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-                  rows={4}
-                />
-              </div>
-
-              <div className="mb-6">
-                <h3 className="text-lg font-semibold mb-2">Actualización de datos</h3>
-                <p className="mb-3 text-sm text-gray-600">
-                  Para cambiar teléfono o correo selecciona NUEVOS_DATOS. Cambiar la razón social envía el contacto a Blacklist.
-                </p>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Teléfono
-                    </label>
-                    <input
-                      value={newDataPhone || ''}
-                      onChange={(e) => setNewDataPhone(e.target.value || null)}
-                      placeholder="Nuevo número de teléfono"
-                      className="w-full p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Correo electrónico
-                    </label>
-                    <input
-                      value={newDataEmail || ''}
-                      onChange={(e) => setNewDataEmail(e.target.value || null)}
-                      placeholder="Nuevo correo electrónico"
-                      className="w-full p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Razón social
-                    </label>
-                    <input
-                      value={newDataBusinessName || ''}
-                      onChange={(e) => setNewDataBusinessName(e.target.value || null)}
-                      placeholder="Nueva razón social"
-                      className="w-full p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="mb-6">
-                <h3 className="text-lg font-semibold mb-2">Canalización</h3>
-                {channels.length > 0 ? (
-                  <div className="space-y-3">
-                    {channels.map((channel) => (
-                      <div key={channel.channel_id} className="flex items-center">
-                        <input
-                          type="radio"
-                          value={channel.code}
-                          checked={selectedChannelCode === channel.code}
-                          onChange={(e) => handleSelectChannel(e.target.value)}
-                          className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-                        />
-                        <div className="ml-3">
-                          <div className="font-medium text-gray-700">{channel.code}</div>
-                          <div className="text-sm text-gray-500">{channel.description}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-gray-500">No hay canalizaciones disponibles para esta campaña</p>
-                )}
-              </div>
-            </>
-          ) : null}
-
-          {closeError && (
-            <div
-              role="alert"
-              className="bg-red-50 text-red-700 p-3 rounded"
-            >
-              {closeError}
-            </div>
-          )}
-
-          {/* Call actions */}
-          <div className="flex justify-end space-x-3">
-            {!surveyData || surveyCompleted || surveyDeclined ? (
-              <button
-                onClick={handleCloseCall}
-                disabled={
-                  isClosing ||
-                  !selectedChannelCode ||
-                  surveyStatus !== 'ready' || detailsStatus !== 'ready'
-                }
-                className="w-auto flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-              >
-                {isClosing ? 'Cerrando llamada...' : 'Cerrar llamada'}
-              </button>
-            ) : null}
-          </div>
-          </fieldset>
-        </div>
-      </div>
-    )
-  }
-
-  // If we don't have an attempt, show the form to start a call
-  return (
-    <div className="space-y-6">
-      {/* Contact details header */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-bold mb-4">Iniciar nueva llamada</h2>
-        <div className="mb-4">
-          <p className="text-gray-600">
-            Campaña: <span className="font-medium">{state?.campaignId}</span>
-          </p>
-          <p className="text-gray-600">
-            Cliente: <span className="font-medium">{contactDetail?.client.clave} - {contactDetail?.client.razon_social}</span>
-          </p>
-        </div>
-      </div>
-
-      {detailsFeedback}
-      {contactDetail && contactInformation}
-      {/* Form to start call */}
-      {contactDetail && (
-        <>
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-lg font-semibold mb-4">Seleccione persona de contacto y teléfono</h3>
-
-            <fieldset disabled={isCalling || pendingStart.current !== null}>
-            {/* Contact person selection */}
-            {contactDetail.contacts.length > 0 ? (
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Persona de contacto
-                </label>
-                <div className="space-y-2">
-                  {contactDetail.contacts.map((person) => (
-                    <div key={person.contact_id} className="flex items-center">
-                      <input
-                        type="radio"
-                        value={person.contact_id}
-                        checked={selectedContactPersonId === person.contact_id}
-                        onChange={(e) => handleSelectContactPerson(Number(e.target.value))}
-                        className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-                      />
-                      <div className="ml-3">
-                        <div className="font-medium text-gray-700">{person.nombre?.trim() || 'Contacto sin nombre registrado'}</div>
-                        {person.ejecutivo && (
-                          <div className="text-sm text-gray-500">Ejecutivo: {person.ejecutivo}</div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <p className="text-gray-500">No hay personas de contacto disponibles</p>
-            )}
-
-            {/* Phone selection */}
-            {selectedContactPersonId !== null ? (
-              <>
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Teléfono
-                  </label>
-                  {/* Filter phones for the selected contact person */}
-                  {availablePhones.length > 0 ? (
-                    <div className="space-y-2">
-                      {availablePhones.map((phone) => (
-                        <div key={phone.phone_id} className="flex items-center">
-                          <input
-                            type="radio"
-                            value={phone.phone_id}
-                            checked={selectedPhone?.phone_id === phone.phone_id}
-                            onChange={() => handleSelectPhone(phone)}
-                            className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-                          />
-                          <div className="ml-3">
-                            <div className="font-medium text-gray-700">{phone.type}</div>
-                            <div className="text-sm text-gray-500">{phone.number}{phone.extension ? ` ext. ${phone.extension}` : ''}</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-gray-500">No hay teléfonos disponibles para esta persona de contacto</p>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div className="mb-4">
-                <p className="text-gray-500">Seleccione una persona de contacto primero</p>
-              </div>
-            )}
-
-            </fieldset>
-            {pendingStart.current && !isCalling && (
-              <p className="mt-3 text-sm text-gray-600">Al reintentar se enviarán los mismos datos del intento anterior.</p>
-            )}
-            {/* Start call button */}
-            <div className="mt-6">
-              <button
-                onClick={async () => {
-                  if (!state || !selectedContactPersonId || !selectedPhone || selectedPhone.contact_id !== selectedContactPersonId) {
-                    alert('Por favor, seleccione una persona de contacto y un teléfono')
-                    return
-                  }
-
-                  const formData: CallFormData = {
-                    campaignId: state!.campaignId,
-                    assignmentId: state!.assignmentId,
-                    clientId: state!.clientId,
-                    contactId: selectedContactPersonId,
-                    dialedNumber: selectedPhone.number,
-                    dialedExtension: selectedPhone.extension
-                  }
-
-                  await handleStartCall(formData)
-                }}
-                disabled={isCalling || !selectedContactPersonId || !selectedPhone}
-                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-              >
-                {isCalling ? 'Iniciando llamada...' : 'Iniciar registro'}
-              </button>
-              {callError && (
-                <div className="mt-3 p-3 bg-red-50 text-red-500 rounded">
-                  {callError}
-                </div>
-              )}
-            </div>
-          </div>
-        </>
-      )}
-
-
-    </div>
-  )
-}
-
-// Helper function to format seconds as HH:MM:SS
-function formatTime(seconds: number): string {
-  const hrs = Math.floor(seconds / 3600)
-  const mins = Math.floor((seconds % 3600) / 60)
-  const secs = seconds % 60
-  return [
-    hrs.toString().padStart(2, '0'),
-    mins.toString().padStart(2, '0'),
-    secs.toString().padStart(2, '0')
-  ].join(':')
-}
-
 export default MakeCall

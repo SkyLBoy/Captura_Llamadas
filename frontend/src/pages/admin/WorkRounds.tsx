@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useConfirm } from '../../components/ui/ConfirmProvider'
 import { useAuth } from '../../contexts/AuthContext'
 import { api } from '../../services/api'
 
@@ -39,6 +40,7 @@ function formatRoundDate(value: string): string {
 
 export default function WorkRounds() {
   const { user } = useAuth()
+  const confirm = useConfirm()
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
@@ -177,13 +179,14 @@ export default function WorkRounds() {
 
     if (!campaign || !agent) return
 
-    const confirmed = window.confirm(
+    startInFlight.current = true
+    const confirmed = await confirm({ title: 'Habilitar ronda de trabajo', action: 'Habilitar ronda', message:
         `¿Habilitar "${name}" para ${agent.full_name} en ${campaign.name}?\n\n` +
         `Contactos previstos: ${summary.summary.eligible}.\n` +
         'Se finalizará la ronda actual, si existe. El historial se conservará.'
-    )
+    })
 
-    if (!confirmed) return
+    if (!confirmed) { startInFlight.current = false; return }
 
     startInFlight.current = true
     setStarting(true)
@@ -261,7 +264,7 @@ export default function WorkRounds() {
   }
 
   return (
-    <section className="space-y-6 rounded-lg bg-white p-6 shadow">
+    <section className="space-y-6 rounded-lg bg-surface p-6 shadow">
       <div>
         <h2 className="text-xl font-bold">Rondas de trabajo</h2>
         <p className="mt-2 text-gray-600">
@@ -385,7 +388,8 @@ export default function WorkRounds() {
           <ul className="list-disc space-y-1 pl-5">
             <li>Contactos asignados: {summary.summary.assigned}</li>
             <li>En Blacklist: {summary.summary.blocked}</li>
-            <li>Inactivos fuera de Blacklist: {summary.summary.inactive}</li>
+            <li>Finalizados fuera de Blacklist: {summary.summary.finalized}</li>
+            <li>Inactivos sin bloqueo ni finalización: {summary.summary.inactive}</li>
             <li>Disponibles para una nueva ronda: {summary.summary.eligible}</li>
           </ul>
 

@@ -5,15 +5,7 @@ import type { Database } from '../../db/schema-types.js';
 import { withTransaction } from '../../db/withTransaction.js';
 import { AppError } from '../../utils/errors.js';
 
-/**
- * IMPORTANTE - ajustar a tu layout real de Excel:
- * No tengo el archivo real de bases de contactos, asi que este mapeo de
- * columnas es un punto de partida razonable segun los campos que ya existen
- * en `clients` / `contact_persons` / `phone_numbers` / `email_addresses`.
- * Cambia `COLUMN_MAP` para que calce con los encabezados reales de tus
- * archivos de PARTNER DELL y SILIMEX (pueden incluso diferir entre campanas;
- * en ese caso separa esta funcion en dos variantes).
- */
+// BASE contiene clientes; DATOS se consulta únicamente para resolver sucursales.
 const COLUMN_MAP = {
   clave: 'CLAVE',
   marca: 'MARCA',
@@ -28,6 +20,10 @@ const COLUMN_MAP = {
   celular: 'CELULAR',
   email: 'CORREO',
   extension:'EXT',
+  status: 'STATUS',
+  nuevoNumero: 'NUEVO NUMERO',
+  nuevoCorreo: 'NUEVO CORREO',
+  nuevoContacto: 'NUEVO CONTACTO',
 } as const;
 
 interface ImportSummary {
@@ -36,6 +32,11 @@ interface ImportSummary {
   imported: number;
   duplicate: number;
   rejected: number;
+  updated: number;
+  blacklisted: number;
+  finalized: number;
+  skipped: number;
+  issues: { row: number; message: string }[];
 }
 
 export async function importContactsFromExcel(opts: {
@@ -59,7 +60,7 @@ export async function importContactsFromExcel(opts: {
   }
 
   const headerRow = sheet.getRow(1).values as (string | undefined)[];
-  const colIndex = (label: string) => headerRow.findIndex((v) => (v ?? '').toString().trim().toUpperCase() === label);
+  const colIndex = (label: string) => headerRow.findIndex((v) => normalizeLabel(cellToString(v) ?? '') === label);
 
   const idx = {
     clave: colIndex(COLUMN_MAP.clave),
@@ -75,6 +76,10 @@ export async function importContactsFromExcel(opts: {
     celular: colIndex(COLUMN_MAP.celular),
     email: colIndex(COLUMN_MAP.email),
     extension:colIndex(COLUMN_MAP.extension),
+    status: colIndex(COLUMN_MAP.status),
+    nuevoNumero: colIndex(COLUMN_MAP.nuevoNumero),
+    nuevoCorreo: colIndex(COLUMN_MAP.nuevoCorreo),
+    nuevoContacto: colIndex(COLUMN_MAP.nuevoContacto),
   };
 
   if ([idx.clave,idx.razonSocial,idx.telefonoPrincipal,idx.nombreContacto,idx.email].some(i=>i===-1)) {
@@ -150,6 +155,14 @@ if (dataSheet) {
 }
 
   return withTransaction(opts.userId, async (trx) => {
+    const schema = await sql<{ready: boolean}>`SELECT EXISTS (
+      SELECT 1 FROM information_schema.columns WHERE table_schema='public'
+      AND table_name='contact_blacklist' AND column_name='import_detail_id'
+    ) AS ready`.execute(trx);
+    if (!schema.rows[0]?.ready) {
+      throw new AppError(409, 'Falta aplicar la migración 002_import_blacklist.sql en PostgreSQL antes de importar.', 'IMPORT_MIGRATION_REQUIRED');
+    }
+    await trx.selectFrom('contact_finalizations').select('attempt_id').limit(1).execute();
     const agent=await trx.selectFrom('users').select('user_id').where('user_id','=',opts.agentId).where('role','=','agent').where('is_active','=',true).executeTakeFirst();
     if(!agent) throw new AppError(400,'Selecciona un agente activo.','INVALID_AGENT');
     // Un solo intento por (campana, hash de archivo) puede llegar a 'success'.
@@ -199,6 +212,12 @@ if (dataSheet) {
 
     const sourceNamespace = await namespaceForCampaign(trx, opts.campaignId);
 
+    let updated = 0;
+    let blacklisted = 0;
+    let finalizedCount = 0;
+    let skipped = 0;
+    const issues: { row: number; message: string }[] = [];
+    const seenKeys = new Set<string>();
     let imported = 0;
     let duplicate = 0;
     let rejected = 0;
@@ -219,6 +238,7 @@ if (dataSheet) {
           normalizeLabel(cell(idx.tipoCompra)) === 'SUCURSAL';
 
         if (isBranchDirectoryRow) {
+          skipped++;
           continue;
         }
         rowsProcessed++;
@@ -229,8 +249,24 @@ if (dataSheet) {
 
       await sql`SAVEPOINT import_row`.execute(trx);
       try {
-        const clave=cellToString(cell(idx.clave));
+        const clave=cellToString(cell(idx.clave))?.toUpperCase();
         if(!clave) throw new AppError(400,'Falta CLAVE.','MISSING_CLIENT_KEY');
+        if (seenKeys.has(clave)) throw new AppError(400,'CLAVE repetida dentro de BASE; conserva una sola fila por cliente.','DUPLICATE_KEY');
+        const status = normalizeLabel(cellToString(cell(idx.status)) ?? '');
+        if (!['', 'BLACKLIST', 'NUEVOS DATOS'].includes(status)) {
+          throw new AppError(400, `STATUS no reconocido: ${status}.`, 'INVALID_STATUS');
+        }
+        sourceData.status = status;
+        const newPhone = cellToString(cell(idx.nuevoNumero));
+        const newEmail = cellToString(cell(idx.nuevoCorreo));
+        const newName = cellToString(cell(idx.nuevoContacto));
+        if (newPhone && (!normalizePhone(newPhone) || newPhone.length > 40 || !/^[+\d\s().-]+$/.test(newPhone))) {
+          throw new AppError(400,'NUEVO NUMERO debe contener un teléfono de al menos 10 dígitos, sin correos ni instrucciones.','INVALID_NEW_PHONE');
+        }
+        const newEmails = newEmail ? splitEmails(newEmail) : [];
+        if (newEmail && (!newEmails.length || newEmails.some(email => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))) {
+          throw new AppError(400,'NUEVO CORREO contiene una dirección no válida.','INVALID_NEW_EMAIL');
+        }
         const razonSocial = cellToString(cell(idx.razonSocial));
         const explicitBranch = cellToString(cell(idx.sucursal));
         const branchCode = branchCodeByClient.get(normalizeKey(clave));
@@ -252,7 +288,7 @@ if (dataSheet) {
             : null);
         const existingClient = await trx
           .selectFrom('clients')
-          .select(['client_id','razon_social','sucursal'])
+          .select(['client_id','razon_social','sucursal','marca','tipo_compra'])
           .where('source_namespace', '=', sourceNamespace)
           .where('clave', '=', clave)
           .executeTakeFirst();
@@ -280,84 +316,93 @@ if (dataSheet) {
           await trx
             .updateTable('clients')
             .set({
-              marca: cellToString(cell(idx.marca)),
-              tipo_compra: cellToString(cell(idx.tipoCompra)),
+              marca: cellToString(cell(idx.marca)) ?? existingClient.marca,
+              tipo_compra: cellToString(cell(idx.tipoCompra)) ?? existingClient.tipo_compra,
               razon_social: razonSocial,
-              sucursal: sucursal,
+              sucursal: sucursal ?? existingClient.sucursal,
             })
             .where('client_id', '=', client.client_id)
             .execute();
         }
 
+        // La asignación identifica a la persona aunque su nombre se haya corregido.
+        const assignment = await trx.selectFrom('contact_assignments')
+          .select(['agent_id', 'round_id', 'contact_id'])
+          .where('client_id', '=', client.client_id).where('campaign_id', '=', opts.campaignId)
+          .where('ended_at', 'is', null).executeTakeFirst();
+        if (assignment && assignment.agent_id !== opts.agentId) {
+          throw new AppError(409, 'Contacto asignado a otro agente.', 'ASSIGNMENT_CONFLICT');
+        }
+        // El bloqueo existente nunca se elimina por reimportar una fila sin STATUS.
+        const block = await trx.selectFrom('contact_blacklist').select('blacklist_id')
+          .where('client_id', '=', client.client_id).where('campaign_id', '=', opts.campaignId)
+          .where('ended_at', 'is', null).executeTakeFirst();
+        const finalized = await trx.selectFrom('contact_finalizations').select('attempt_id')
+          .where('client_id', '=', client.client_id).where('campaign_id', '=', opts.campaignId).executeTakeFirst();
+        if (assignment && assignment.round_id !== workRound.round_id && !block && !finalized && status !== 'BLACKLIST') {
+          throw new AppError(409,'La asignación no pertenece a la ronda activa.','ASSIGNMENT_ROUND_CONFLICT');
+        }
+        const previous = await trx.selectFrom('import_detail').select('source_data')
+          .where('client_id', '=', client.client_id).where('result', '!=', 'rejected')
+          .orderBy('detail_id', 'desc').executeTakeFirst();
+        const previousData = previous?.source_data as Record<string, unknown> | undefined;
+        // Un Excel antiguo no debe deshacer una corrección hecha después en la app.
+        const applyPhone = !!newPhone && cellToString(previousData?.nuevoNumero) !== newPhone;
+        const applyEmail = !!newEmail && cellToString(previousData?.nuevoCorreo) !== newEmail;
+        const applyName = !!newName && cellToString(previousData?.nuevoContacto) !== newName;
         const nombreContacto = cellToString(cell(idx.nombreContacto));
-        let contactId: number | null = null;
-        let newContactCreated=false;
-        {
-          const existingContact = await trx
-            .selectFrom('contact_persons')
-            .select('contact_id')
-            .where('client_id', '=', client.client_id)
-            .where('nombre', nombreContacto === null ? 'is' : '=', nombreContacto)
-            .executeTakeFirst();
-
-          const contact =
-            existingContact ??
-            (await trx
-              .insertInto('contact_persons')
-              .values({
-                client_id: client.client_id,
-                nombre: nombreContacto,
-                ejecutivo: cellToString(cell(idx.ejecutivo)),
-              })
-              .returning(['contact_id'])
-              .executeTakeFirstOrThrow());
-          contactId = contact.contact_id;
-          newContactCreated=!existingContact;
-
-          await upsertPhone(trx, contact.contact_id, 'main', cellToString(cell(idx.telefonoPrincipal)),cellToString(cell(idx.extension))??'');
-          await upsertPhone(trx, contact.contact_id, 'reference1', cellToString(cell(idx.telefonoRef1)));
-          await upsertPhone(trx, contact.contact_id, 'reference2', cellToString(cell(idx.telefonoRef2)));
-          await upsertPhone(trx, contact.contact_id, 'mobile', cellToString(cell(idx.celular)));
-
+        const sourceContactId = assignment?.contact_id ??
+          (typeof previousData?.contactId === 'number' ? previousData.contactId : null);
+        const existingContact = sourceContactId
+          ? await trx.selectFrom('contact_persons').select('contact_id')
+              .where('contact_id', '=', sourceContactId).where('client_id', '=', client.client_id).executeTakeFirst()
+          : await trx.selectFrom('contact_persons').select('contact_id')
+              .where('client_id', '=', client.client_id)
+              .where('nombre', nombreContacto === null ? 'is' : '=', nombreContacto)
+              .orderBy('contact_id').executeTakeFirst();
+        const contact = existingContact ?? await trx.insertInto('contact_persons').values({
+          client_id: client.client_id, nombre: nombreContacto,
+          ejecutivo: cellToString(cell(idx.ejecutivo)),
+        }).returning('contact_id').executeTakeFirstOrThrow();
+        const contactId = contact.contact_id;
+        sourceData.contactId = contactId;
+        const newContactCreated = !existingContact;
+        if (applyName) await trx.updateTable('contact_persons').set({nombre: newName})
+          .where('contact_id', '=', contactId).execute();
+        // BASE original solo inicializa la persona; no resucita teléfonos retirados.
+        if (newContactCreated) {
+          await upsertPhone(trx, contactId, 'main', cellToString(cell(idx.telefonoPrincipal)), cellToString(cell(idx.extension)) ?? '');
+          await upsertPhone(trx, contactId, 'reference1', cellToString(cell(idx.telefonoRef1)));
+          await upsertPhone(trx, contactId, 'reference2', cellToString(cell(idx.telefonoRef2)));
+          await upsertPhone(trx, contactId, 'mobile', cellToString(cell(idx.celular)));
           const email = cellToString(cell(idx.email));
-          if (email) {
-            await trx
-              .insertInto('email_addresses')
-              .values({ contact_id: contact.contact_id, email })
-              .onConflict((oc) => oc.columns(['contact_id', 'email']).doNothing())
-              .execute();
+          if (email) for (const address of splitEmails(email)) {
+            await trx.insertInto('email_addresses').values({contact_id: contactId, email: address})
+              .onConflict(oc => oc.columns(['contact_id','email']).doNothing()).execute();
           }
         }
-
-        const assignment = await trx
-          .selectFrom('contact_assignments')
-          .select(['agent_id', 'round_id'])
-          .where('client_id', '=', client.client_id)
-          .where('campaign_id', '=', opts.campaignId)
-          .where('ended_at', 'is', null)
-          .executeTakeFirst();
-        if (assignment && assignment.agent_id !== opts.agentId){ 
-          throw new AppError(
-            409, 
-            'Contacto asignado a otro agente.', 
-            'ASSIGNMENT_CONFLICT'
-        );
-      }
-        if (assignment && assignment.round_id !== workRound.round_id) {
-          throw new AppError(
-            409,
-             'La asignacion del contacto no pertenece a la ronda activa',
-              'ASSIGNMENT_ROUND_CONFLICT'
-          );
+        if (applyPhone && newPhone) {
+          await trx.updateTable('phone_numbers').set({is_active: false})
+            .where('contact_id','=',contactId).where('type','=','main').where('is_active','=',true).execute();
+          await trx.insertInto('phone_numbers').values({contact_id: contactId, type: 'main',
+            number: newPhone, extension: '', normalized_number: normalizePhone(newPhone)})
+            .onConflict(oc => oc.columns(['contact_id','number','extension','type']).doUpdateSet({is_active: true})).execute();
         }
-        if (!assignment) await trx
-          .insertInto('contact_assignments')
-          .values({ client_id: client.client_id, 
-            contact_id: contactId, 
-            campaign_id: opts.campaignId, 
-            agent_id: opts.agentId })
-            .execute();
-        await trx
+        if (applyEmail && newEmail) {
+          await trx.updateTable('email_addresses').set({is_active: false})
+            .where('contact_id','=',contactId).where('is_active','=',true).execute();
+          for (const address of newEmails) {
+            await trx.insertInto('email_addresses').values({contact_id: contactId, email: address})
+              .onConflict(oc => oc.columns(['contact_id','email']).doUpdateSet({is_active: true})).execute();
+          }
+        }
+        if (!assignment && !block && !finalized) await trx.insertInto('contact_assignments').values({
+          client_id: client.client_id, contact_id: contactId, campaign_id: opts.campaignId,
+          agent_id: opts.agentId, round_id: workRound.round_id,
+        }).execute();
+        const changed = newContactCreated || applyName || applyEmail || applyPhone ||
+          (!!existingClient && !!sucursal && sucursal !== existingClient.sucursal);
+        const detail = await trx
           .insertInto('import_detail')
           .values({
             import_id: importLog.import_id,
@@ -365,17 +410,28 @@ if (dataSheet) {
             row_number: rowNumber,
             source_data: JSON.stringify(sourceData),
             client_id: client.client_id,
-            result: isNewClient || newContactCreated ? 'imported' : 'duplicate',
+            result: isNewClient || changed ? 'imported' : 'duplicate',
           })
-          .execute();
-
-        if (isNewClient || newContactCreated) imported++;
+          .returning('detail_id').executeTakeFirstOrThrow();
+        if (status === 'BLACKLIST' && !block) {
+          await trx.insertInto('contact_blacklist').values({
+            client_id: client.client_id, campaign_id: opts.campaignId,
+            import_detail_id: detail.detail_id,
+            reason: 'BLACKLIST importado de BASE (sin fecha histórica de bloqueo)',
+          }).execute();
+        }
+        if (isNewClient || changed) imported++;
         else duplicate++;
+        if (!isNewClient && changed) updated++;
+        if (block || status === 'BLACKLIST') blacklisted++;
+        if (finalized) finalizedCount++;
+        seenKeys.add(clave);
         await sql`RELEASE SAVEPOINT import_row`.execute(trx);
       } catch (err) {
         await sql`ROLLBACK TO SAVEPOINT import_row`.execute(trx);
         await sql`RELEASE SAVEPOINT import_row`.execute(trx);
         rejected++;
+        if (issues.length < 50) issues.push({row: rowNumber, message: err instanceof Error ? err.message : 'Error desconocido'});
         await trx
           .insertInto('import_detail')
           .values({
@@ -397,7 +453,7 @@ if (dataSheet) {
       .where('import_id', '=', importLog.import_id)
       .execute();
 
-    return { importId: importLog.import_id, rowsProcessed, imported, duplicate, rejected };
+    return { importId: importLog.import_id, rowsProcessed, imported, duplicate, rejected, updated, blacklisted, finalized: finalizedCount, skipped, issues };
   });
 }
 
@@ -443,6 +499,8 @@ export async function distributeContacts(opts: {
       .selectFrom('clients as c')
       .select('c.client_id')
       .where('c.is_active', '=', true)
+      .where(eb => eb.not(eb.exists(eb.selectFrom('contact_finalizations as f').select('f.attempt_id')
+        .whereRef('f.client_id', '=', 'c.client_id').where('f.campaign_id', '=', opts.campaignId))))
       .where('c.source_namespace', '=', namespace)
       .where(eb => eb.not(eb.exists(eb.selectFrom('contact_blacklist as b').select('b.blacklist_id').whereRef('b.client_id', '=', 'c.client_id').where('b.campaign_id', '=', opts.campaignId).where('b.ended_at', 'is', null))))
       .where((eb) =>
@@ -464,7 +522,7 @@ export async function distributeContacts(opts: {
       const agentId = opts.agentIds[i % opts.agentIds.length]!;
       const roundId = roundByAgent.get(agentId)!;
 
-      if (!roundId === undefined) {
+      if (roundId === undefined) {
         throw new AppError(
           400,
           'No se encontró la ronda del agente',
@@ -530,9 +588,18 @@ function cellToString(v: unknown): string | null {
     return String((v as { text: unknown }).text).trim() || null;
   }
   if (typeof v === 'object') {
+    if ('richText' in v && Array.isArray(v.richText)) return v.richText.map(part => String(part.text ?? '')).join('').trim() || null;
     if ('result' in v) return cellToString((v as { result: unknown }).result);
     throw new AppError(400, 'Celda sin valor legible; recalcula y guarda el Excel.', 'INVALID_CELL');
   }
   const s = String(v).trim();
   return s.length ? s : null;
+}
+
+function normalizeLabel(value: string): string {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toUpperCase();
+}
+
+function splitEmails(value: string): string[] {
+  return [...new Set(value.split(/[\/;,\r\n]+/).map(email => email.trim()).filter(Boolean))];
 }

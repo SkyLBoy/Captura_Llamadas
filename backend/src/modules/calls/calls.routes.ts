@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../../middleware/requireAuth.js';
 import { db } from '../../db/kysely.js';
 import { closeCall, openCall } from './calls.service.js';
+import { getDailyHistory, HistoryQuerySchema } from './history.service.js';
 
 const OpenCallSchema = z.object({
   idempotencyKey: z.string().uuid(),
@@ -36,6 +37,8 @@ const CloseCallSchema = z.object({
 });
 
 export async function callsRoutes(app: FastifyInstance) {
+  app.get('/api/calls/history', { preHandler: requireAuth }, async request =>
+    getDailyHistory(HistoryQuerySchema.parse(request.query), request.session.user!));
   app.get('/api/calls/open', { preHandler: requireAuth }, async request => ({
     attempt: await db.selectFrom('call_attempts').selectAll().where('agent_id', '=', request.session.user!.userId).where('state', '=', 'open').executeTakeFirst() ?? null,
   }));

@@ -40,7 +40,7 @@ const UserList: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-lg shadow p-6">
+      <div className="bg-surface rounded-lg shadow p-6">
         <div className= "mb-4 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-xl font-bold">Gestión de Usuarios</h2>
             <Link
@@ -72,7 +72,7 @@ const UserList: React.FC = () => {
                 </th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody className="bg-surface divide-y divide-gray-200">
               {users.length > 0 ? (
                 users.map((userItem: any) => (
                   <tr key={userItem.user_id} className="hover:bg-gray-50">
@@ -99,23 +99,7 @@ const UserList: React.FC = () => {
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      {/* Aquí irían los botones de editar/eliminar */}
-                      <button
-                        className="text-indigo-600 hover:text-indigo-900 mr-2"
-                        disabled={userItem.user_id === user.id}
-                      >
-                        Editar
-                      </button>
-                      {!userItem.is_active && (
-                        <button className="text-green-600 hover:text-green-900">
-                          Activar
-                        </button>
-                      )}
-                      {userItem.is_active && userItem.user_id !== user.id && (
-                        <button className="text-red-600 hover:text-red-900">
-                          Desactivar
-                        </button>
-                      )}
+                      <span className="small">Solo consulta</span>
                     </td>
                   </tr>
                 ))

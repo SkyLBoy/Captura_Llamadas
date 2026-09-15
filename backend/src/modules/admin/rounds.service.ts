@@ -100,6 +100,8 @@ export async function startWorkRound(
       .where('a.agent_id', '=', input.agentId)
       .where('a.ended_at', 'is', null)
       .where('c.is_active', '=', true)
+      .where(eb => eb.not(eb.exists(eb.selectFrom('contact_finalizations as f').select('f.attempt_id')
+        .whereRef('f.client_id', '=', 'a.client_id').whereRef('f.campaign_id', '=', 'a.campaign_id'))))
       .where(eb =>
         eb.not(
           eb.exists(

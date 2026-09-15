@@ -46,6 +46,24 @@ export async function openCall(input: OpenCallInput, userId: number) {
     const existing = await trx.selectFrom('call_attempts').selectAll()
       .where('idempotency_key', '=', input.idempotencyKey).executeTakeFirst();
 
+    // Resolve an identical retry before checking eligibility for a NEW call.
+    if (existing) {
+      if (existing.agent_id !== input.agentId || existing.assignment_id !== input.assignmentId ||
+          existing.client_id !== input.clientId || existing.campaign_id !== input.campaignId ||
+          existing.contact_id !== input.contactId || existing.dialed_number !== input.dialedNumber ||
+          existing.dialed_extension !== (input.dialedExtension ?? null))
+        throw new AppError(409, 'La clave ya se utilizó con otros datos.', 'IDEMPOTENCY_CONFLICT');
+      return { attempt_id: existing.attempt_id, call_start: existing.call_start, state: existing.state };
+    }
+
+    // Protege también una ficha que el agente dejó abierta antes del cierre.
+    await trx.selectFrom('clients').select('client_id').where('client_id', '=', input.clientId).forUpdate().executeTakeFirst();
+    const finalized = await trx.selectFrom('contact_finalizations').select('attempt_id')
+      .where('client_id', '=', input.clientId).where('campaign_id', '=', input.campaignId).executeTakeFirst();
+    if (finalized) throw new AppError(409,
+      'Contacto finalizado: ya tuvo un resultado Exitoso o una encuesta contestada en esta campaña.',
+      'CONTACT_FINALIZED');
+
     const assignment = await trx
     .selectFrom('contact_assignments as assignment')
       .innerJoin(
@@ -95,14 +113,6 @@ export async function openCall(input: OpenCallInput, userId: number) {
         'CONTACT_ALREADY_STARTED',
       );
     }
-    if (existing) {
-      if (existing.agent_id !== input.agentId || existing.assignment_id !== input.assignmentId ||
-          existing.client_id !== input.clientId || existing.campaign_id !== input.campaignId ||
-          existing.contact_id !== input.contactId || existing.dialed_number !== input.dialedNumber ||
-          existing.dialed_extension !== (input.dialedExtension ?? null))
-        throw new AppError(409, 'La clave ya se utilizó con otros datos.', 'IDEMPOTENCY_CONFLICT');
-      return { attempt_id: existing.attempt_id, call_start: existing.call_start };
-    }
     const row = await trx
       .insertInto('call_attempts')
       .values({
@@ -122,7 +132,7 @@ export async function openCall(input: OpenCallInput, userId: number) {
         // mandamos '' como placeholder porque Kysely exige un valor.
         agent_name_snapshot: '',
       })
-      .returning(['attempt_id', 'call_start'])
+      .returning(['attempt_id', 'call_start', 'state'])
       .executeTakeFirstOrThrow();
 
     return row;

@@ -15,7 +15,10 @@
     "test:db": "node tests/database/test_schema.mjs",
     "bootstrap:admin": "tsx backend/src/scripts/bootstrap-admin.ts",
     "test:backend": "npm run build && node tests/backend/integration.mjs",
-    "test:frontend": "tsx --test tests/frontend/call-flow.test.ts"
+    "test:frontend": "tsx --test tests/frontend/call-flow.test.ts",
+    "test:reports": "npm run build && node tests/backend/report-workbook.test.mjs && node tests/backend/report-service.test.mjs",
+    "test:call-retry": "npm run build && node tests/backend/call-retry.test.mjs",
+    "test:finalizations": "npm run build && node tests/backend/contact-finalizations.test.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^9.3.1",
@@ -27,6 +30,7 @@
     "dotenv": "^16.4.5",
     "exceljs": "^4.4.0",
     "fastify": "^4.28.1",
+    "jszip": "^3.10.1",
     "kysely": "^0.27.4",
     "pg": "^8.12.0",
     "proyecto_capturar_llamadas": "file:..",

@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react'
+import { useConfirm } from '../../components/ui/ConfirmProvider'
 import { useAuth } from '../../contexts/AuthContext'
 import { useApi } from '../../hooks/useApi'
 import { api } from '../../services/api'
 
 const Blacklist: React.FC = () => {
   const { user } = useAuth()
+  const confirm = useConfirm()
   const { loading, error, executeApiCall } = useApi()
   const [blacklist, setBlacklist] = useState<Array<any>>([])
   const [campaigns, setCampaigns] = useState<
@@ -28,35 +30,24 @@ const Blacklist: React.FC = () => {
   const loadBlacklist = async (
     campaignId: number | null = selectedCampaignId
   ) => {
-    // Construimos la URL manualmente usando el proxy de Vite (/api -> http://localhost:3000)
-    let url = '/api/admin/blacklist';
-    if (campaignId !== null) {
-      url += `?campaignId=${campaignId}`;
-    }
+    const result = await executeApiCall(() =>
+      api.admin.getBlacklist(campaignId)
+    )
 
-    try {
-      const response = await fetch(url, {
-        credentials: 'include'
-      });
-
-      if (!response.ok) {
-        throw new Error('Error al obtener la lista negra');
-      }
-
-      const result = await response.json();
-      setBlacklist(result.blacklist || []);
-    } catch (error) {
-      throw error;
+    if (result) {
+      setBlacklist(result.blacklist || [])
     }
   }
 
   const handleRelease = async (blacklistId: number) => {
-    try {
-      await executeApiCall(() => api.admin.releaseBlacklist(blacklistId))
-      // Recargar la lista después de liberar
+    const item = blacklist.find(item => item.blacklist_id === blacklistId)
+    if (!await confirm({ title: 'Liberar contacto de Blacklist', message: `Se retirará el bloqueo de ${item?.razon_social || item?.clave || 'este contacto'}. Los demás criterios de elegibilidad de la campaña siguen aplicando.`, action: 'Liberar contacto' })) return
+    const result = await executeApiCall(() =>
+      api.admin.releaseBlacklist(blacklistId)
+    )
+
+    if (result) {
       await loadBlacklist()
-    } catch (e) {
-      // El error ya se maneja en executeApiCall
     }
   }
 
@@ -72,11 +63,25 @@ const handleCampaignChange = async (
   if (loading && !blacklist.length && !campaigns.length) {
     return <div className="text-center py-8">Cargando...</div>
   }
-
   if (error) {
     return (
-      <div className="bg-red-50 text-red-500 p-4 rounded mb-6">
-        {error}
+      <div
+        role="alert"
+        className="bg-red-50 text-red-700 p-4 rounded mb-6"
+      >
+        <p>{error}</p>
+
+        <button
+          type="button"
+          onClick={async () => {
+            await loadCampaigns()
+            await loadBlacklist()
+          }}
+          disabled={loading}
+          className="mt-3 rounded bg-red-700 px-4 py-2 text-white disabled:opacity-50"
+        >
+          {loading ? 'Reintentando...' : 'Reintentar'}
+        </button>
       </div>
     )
   }
@@ -87,7 +92,7 @@ const handleCampaignChange = async (
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-lg shadow p-6">
+      <div className="bg-surface rounded-lg shadow p-6">
         <h2 className="text-xl font-bold mb-4">Lista Negra de Contactos</h2>
         <div className="mb-4">
           <label htmlFor="campaign-select" className="block text-sm font-medium text-gray-700 mb-2">
@@ -133,7 +138,7 @@ const handleCampaignChange = async (
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="bg-surface divide-y divide-gray-200">
                 {blacklist.map((item: any) => (
                   <tr key={item.blacklist_id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -143,17 +148,20 @@ const handleCampaignChange = async (
                       {item.razon_social}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {item.campaign}
+                      {campaigns.find(c => c.campaign_id === item.campaign_id)?.name ?? 'Campaña no disponible'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {item.reason || 'Sin razón especificada'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {new item.started_at 
-                      ? new Date(item.started_at).toLocaleDateString('es-MX') : 'N/A'}
+                      {item.started_at 
+                      ? new Date(item.started_at).toLocaleDateString('es-MX', {
+                        timeZone: 'America/Hermosillo',
+                      }) : 'N/A'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <button
+                        disabled={loading}
                         onClick={() => handleRelease(item.blacklist_id)}
                         className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                       >

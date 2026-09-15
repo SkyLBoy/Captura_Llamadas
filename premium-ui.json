@@ -1,0 +1,11 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["frontend/src"],
+  "locale": "es-MX",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": ["Select/Listbox", "Date", "Form", "Scrollbar", "Toast", "CRUD"],
+  "ownership": { "Select/Listbox": "native", "Date": "native" },
+  "requiredCommands": ["typecheck", "build", "unit"],
+  "commands": { "typecheck": "npm --prefix frontend run typecheck", "build": "npm --prefix frontend run build", "unit": "npm run test:frontend" },
+  "evidence": { "failurePaths": "tests/frontend/call-flow.test.ts", "crudFullFlow": "docs/frontend-verification.md" }
+}

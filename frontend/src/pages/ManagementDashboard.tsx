@@ -1,82 +1,20 @@
-import React from 'react'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { NavLink, Outlet } from 'react-router-dom'
 import AdminLayout from '../layouts/AdminLayout'
-
-
-const ManagementDashboard: React.FC = () => {
+const modules = [
+  ['historial', 'Historial diario', 'Revisa las llamadas del día y filtra por agente o campaña.'],
+  ['contactos-finalizados', 'Contactos finalizados', 'Consulta los resultados exitosos y las encuestas contestadas.'],
+  ['reportes', 'Reportes y avances', 'Descarga el avance del mes o consulta un periodo anterior en Excel.'],
+  ['rondas', 'Rondas de trabajo', 'Consulta bases, revisa el historial y prepara la siguiente ronda.'],
+  ['importar-contactos', 'Importar contactos', 'Carga una base y asígnala al agente correspondiente.'],
+  ['usuarios', 'Usuarios', 'Gestiona los accesos de agentes y administradores.'],
+  ['canalizaciones', 'Canalizaciones', 'Asigna una disposición a las canalizaciones pendientes.'],
+  ['blacklist', 'Lista negra', 'Consulta los contactos excluidos de la operación.'],
+  ['crear-usuario', 'Crear usuario', 'Registra una nueva cuenta y define su rol.'],
+]
+export default function ManagementDashboard() {
   const { user } = useAuth()
-
-  if (!user || user.role !== 'admin') {
-    return <div>Acceso no autorizado</div>
-  }
-
-  return (
-    <AdminLayout>
-    <div className="space-y-6">
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-bold mb-4">Panel de Administración</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <NavLink
-            to="/gestion/rondas"
-            className="flex h-32 items-center justify-center rounded-lg bg-white shadow text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors"
-          >
-            <div className="text-center">
-              <div className="text-2xl font-bold text-indigo-600">Rondas de Trabajo</div>
-              <div className="text-sm text-gray-500">Consultar bases y preparar la siguiente ronda</div>
-            </div>
-          </NavLink>
-          <NavLink
-            to="/gestion/importar-contactos"
-            className="flex h-32 items-center justify-center rounded-lg bg-white shadow text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors"
-          >
-            <div className="text-center">
-              <div className="text-2xl font-bold text-indigo-600">
-                Importar Contactos
-                </div>
-              <div className="text-sm text-gray-500">
-                Cargar una base y asignarla a un agente
-              </div>
-            </div>
-          </NavLink>
-          <NavLink
-            to="/gestion/usuarios"
-            className="block h-32 bg-white rounded-lg shadow flex items-center justify-center
-                   text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors"
-          >
-            <div className="text-center">
-              <div className="text-2xl font-bold text-indigo-600">Usuarios</div>
-              <div className="text-sm text-gray-500">Gestionar agentes y administradores</div>
-            </div>
-          </NavLink>
-
-          <NavLink
-            to="/gestion/canalizaciones"
-            className="block h-32 bg-white rounded-lg shadow flex items-center justify-center
-                   text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors"
-          >
-            <div className="text-center">
-              <div className="text-2xl font-bold text-indigo-600">Canalizaciones</div>
-              <div className="text-sm text-gray-500">Clasificar canalizaciones pendientes</div>
-            </div>
-          </NavLink>
-
-          <NavLink
-            to="/gestion/blacklist"
-            className="block h-32 bg-white rounded-lg shadow flex items-center justify-center
-                   text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors"
-          >
-            <div className="text-center">
-              <div className="text-2xl font-bold text-indigo-600">Lista Negra</div>
-              <div className="text-sm text-gray-500">Gestionar contactos bloqueados</div>
-            </div>
-          </NavLink>
-        </div>
-      </div>
-    <Outlet />
-  </div>
-</AdminLayout>
-  )
+  const { pathname } = useLocation()
+  if (user?.role !== 'admin') return <p>Acceso no autorizado</p>
+  return <AdminLayout>{pathname === '/gestion' || pathname === '/gestion/' ? <><div className="page-heading"><div className="eyebrow">Centro de gestión</div><h1>La operación, en perspectiva.</h1><p>Administra las campañas y acompaña el trabajo de tu equipo.</p></div><div className="management-grid">{modules.map(([route,title,description]) => <NavLink className="management-link" to={`/gestion/${route}`} key={route}><div><h2>{title}</h2><p>{description}</p></div><span aria-hidden="true">↗</span></NavLink>)}</div></> : <Outlet />}</AdminLayout>
 }
-
-export default ManagementDashboard

@@ -73,7 +73,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, [])
 
   if (isLoading) {
-    return null
+    return <div className="app-main" role="status">Comprobando tu sesión…</div>
   }
 
   return (

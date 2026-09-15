@@ -1,0 +1,15 @@
+const fs=require('node:fs');const p=__dirname+'/simulation.js';let s=fs.readFileSync(p,'utf8');
+s=s.replace("let step=0,question=0,answers=['',''],declined=false,channel='',started=0,ended=0,closed=false;","let step=0,question=0,answers=['',''],declined=false,channel='',started=0,ended=0,closed=false,withSurvey=true,newBusiness='';");
+s=s.replace("${buttons(false,true,'Iniciar simulación')}","<label class=\"check\"><input id=\"withSurvey\" type=\"checkbox\" ${withSurvey?'checked':''}><span>Incluir una encuesta de ejemplo.<br><small>Desactívala para probar un escenario sin encuesta, como no contesta o buzón.</small></span></label>${buttons(false,true,'Iniciar simulación')}");
+s=s.replace("$('next').onclick=()=>{started=Date.now();go(1)}", "$('withSurvey').onchange=e=>withSurvey=e.target.checked;$('next').onclick=()=>{started=Date.now();go(withSurvey?1:2)}");
+s=s.replace("if(['NO_CONTESTA','BUZON'].includes(channel))", "if(withSurvey&&['NO_CONTESTA','BUZON'].includes(channel))");
+s=s.replace("Este recorrido simula una conversación con encuesta. Para no contesta o buzón, el flujo de encuesta requiere definir cómo registrar que no se realizó; no lo convertiremos en un rechazo.", "Esta simulación incluye una encuesta de conversación. Para probar no contesta o buzón, inicia otra simulación sin encuesta. No registraremos un rechazo que el contacto no expresó.");
+s=s.replace("if(channel==='NUEVOS_DATOS_RAZON_SOCIAL')return message('El cambio de razón social necesita el nuevo dato y su validación. En este borrador puedes completar el recorrido con otra canalización.');", "if(channel==='NUEVOS_DATOS_RAZON_SOCIAL'&&(!newBusiness.trim()||newBusiness.trim()==='Soluciones del Noroeste'))return message('Escribe una razón social diferente para simular su actualización.');");
+s=s.replace("${buttons(true,true,'Revisar cierre')}","${buttons(withSurvey,true,'Revisar cierre')}");
+s=s.replace("$('back').onclick=()=>go(1);$('next')", "if($('back'))$('back').onclick=()=>go(1);$('next')");
+s=s.replace("${declined?'El contacto no desea contestar':answers.map(esc).join(' · ')}", "${!withSurvey?'Escenario sin encuesta':declined?'El contacto no desea contestar':answers.map(esc).join(' · ')}");
+s=s.replace("<div class=\"wide\"><dt>Notas</dt>", "${channel==='NUEVOS_DATOS_RAZON_SOCIAL'?'<div class=\"wide\"><dt>Nueva razón social</dt><dd>'+esc(newBusiness)+'</dd></div>':''}<div class=\"wide\"><dt>Notas</dt>");
+s=s.replace("closed=false;$('notes').value=''", "closed=false;withSurvey=true;newBusiness='';$('notes').value=''");
+s=s.replace("render();\n", "render();\n");
+s=s.replace("</div>`:''}\nrender();", "</div>`:'';if(c&&channel==='NUEVOS_DATOS_RAZON_SOCIAL'){$('consequence').innerHTML+='<label class=\"new-business\" for=\"newBusiness\">Nueva razón social<input id=\"newBusiness\" type=\"text\" value=\"'+esc(newBusiness)+'\" autocomplete=\"off\"></label>';$('newBusiness').oninput=e=>newBusiness=e.target.value}}\nrender();");
+fs.writeFileSync(p,s);

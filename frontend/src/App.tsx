@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ProtectedRoute } from './components/ProtectedRoute'
+import { ConfirmProvider } from './components/ui/ConfirmProvider'
 import Login from './pages/Login'
 import routes from './routes'
 
@@ -17,7 +18,7 @@ function HomeRedirect() {
 
 function App() {
   return (
-    <AuthProvider>
+    <ConfirmProvider><AuthProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -47,7 +48,7 @@ function App() {
           ))}
         </Routes>
       </BrowserRouter>
-    </AuthProvider>
+    </AuthProvider></ConfirmProvider>
   )
 }
 

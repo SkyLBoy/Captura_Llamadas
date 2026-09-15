@@ -1,0 +1,109 @@
+{
+  "starts": [
+    {
+      "campaignId": 1,
+      "clientId": 1,
+      "assignmentId": 1,
+      "contactId": 11,
+      "dialedNumber": "6620000200",
+      "dialedExtension": "205",
+      "idempotencyKey": "368d0d4c-82d6-4fbe-8673-48d4346708bf"
+    },
+    {
+      "campaignId": 1,
+      "clientId": 1,
+      "assignmentId": 1,
+      "contactId": 11,
+      "dialedNumber": "6620000200",
+      "dialedExtension": "205",
+      "idempotencyKey": "368d0d4c-82d6-4fbe-8673-48d4346708bf"
+    },
+    {
+      "campaignId": 1,
+      "clientId": 1,
+      "assignmentId": 1,
+      "contactId": 10,
+      "dialedNumber": "6620000100",
+      "dialedExtension": "104",
+      "idempotencyKey": "3eca99e0-610e-4854-b632-547fbbead242"
+    }
+  ],
+  "closes": [
+    {
+      "channelCode": "SE_ENVIA_PROMOCION_POR_CORREO",
+      "notes": "Notas QA conservadas al recuperar la llamada.",
+      "newData": {
+        "phone": "6620000300",
+        "businessName": "Nueva empresa QA"
+      },
+      "survey": {
+        "versionId": 1,
+        "declined": false,
+        "answers": [
+          {
+            "questionId": 1,
+            "optionId": 5,
+            "answerText": "Marca de prueba del cliente"
+          },
+          {
+            "questionId": 2,
+            "answerText": "Necesita información de limpieza de equipos."
+          }
+        ]
+      }
+    },
+    {
+      "channelCode": "SE_ENVIA_PROMOCION_POR_CORREO",
+      "notes": "Notas QA conservadas al recuperar la llamada.",
+      "newData": {
+        "phone": "6620000300",
+        "businessName": "Nueva empresa QA"
+      },
+      "survey": {
+        "versionId": 1,
+        "declined": false,
+        "answers": [
+          {
+            "questionId": 1,
+            "optionId": 5,
+            "answerText": "Marca de prueba del cliente"
+          },
+          {
+            "questionId": 2,
+            "answerText": "Necesita información de limpieza de equipos."
+          }
+        ]
+      }
+    },
+    {
+      "channelCode": "SE_ENVIA_PROMOCION_POR_CORREO",
+      "survey": {
+        "versionId": 1,
+        "declined": false,
+        "answers": [
+          {
+            "questionId": 1,
+            "optionId": 1
+          },
+          {
+            "questionId": 2,
+            "answerText": "ghdgfh"
+          }
+        ]
+      }
+    }
+  ],
+  "admin": [
+    {
+      "action": "classify",
+      "dispositionId": 3
+    },
+    {
+      "action": "round",
+      "campaignId": 1,
+      "agentId": 901,
+      "name": "Ronda de verificación UI",
+      "expectedRoundId": 1
+    }
+  ]
+}

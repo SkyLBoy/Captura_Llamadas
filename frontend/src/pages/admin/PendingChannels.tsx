@@ -128,7 +128,7 @@ const handleClassify = async (
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-lg shadow p-6">
+      <div className="bg-surface rounded-lg shadow p-6">
         <h2 className="text-xl font-bold mb-4">Canalizaciones Pendientes</h2>
         {saveError && (
           <div role="alert" className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
@@ -162,7 +162,7 @@ const handleClassify = async (
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="bg-surface divide-y divide-gray-200">
                 {pendingChannels.map((channel: any) => (
                   <tr key={channel.channel_id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">

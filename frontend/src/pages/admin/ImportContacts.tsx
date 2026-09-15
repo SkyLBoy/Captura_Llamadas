@@ -20,6 +20,11 @@ type ImportSummary= {
     rowsProcessed: number
     imported: number
     duplicate: number
+    updated: number
+    finalized: number
+    blacklisted: number
+    skipped: number
+    issues: { row: number; message: string }[]
     rejected: number
 }
 
@@ -134,7 +139,7 @@ async function handleImport() {
   }
 
   return (
-    <section className="space-y-6 rounded-lg bg-white p-6 shadow">
+    <section className="space-y-6 rounded-lg bg-surface p-6 shadow">
       <div>
         <h2 className="text-xl font-bold">Importar contactos</h2>
         <p className="mt-2 text-gray-600">
@@ -171,7 +176,7 @@ async function handleImport() {
             id="import-campaign"
             value={campaignId}
             onChange={event => setCampaignId(event.target.value)}
-            className="mt-2 block w-full rounded-md border border-gray-300 bg-white p-3"
+            className="mt-2 block w-full rounded-md border border-gray-300 bg-surface p-3"
           >
             <option value="">Selecciona una campaña</option>
             {campaigns.map(campaign => (
@@ -193,7 +198,7 @@ async function handleImport() {
             id="import-agent"
             value={agentId}
             onChange={event => setAgentId(event.target.value)}
-            className="mt-2 block w-full rounded-md border border-gray-300 bg-white p-3"
+            className="mt-2 block w-full rounded-md border border-gray-300 bg-surface p-3"
           >
             <option value="">Selecciona un agente</option>
             {agents.map(agent => (
@@ -248,7 +253,7 @@ async function handleImport() {
 
         <p id="import-file-help" className="mt-2 text-sm text-gray-600">
             Se importará únicamente la hoja BASE. La primera fila debe
-            incluir CLAVE, RAZON SOCIAL, TEL, CONTACTO y CORREO.
+            incluir CLAVE, RAZON SOCIAL, TEL, CONTACTO y CORREO. Se respetan STATUS BLACKLIST y los campos NUEVO NUMERO, NUEVO CORREO y NUEVO CONTACTO. Los contactos finalizados no se habilitan nuevamente. Las filas de sucursales se omiten; DATOS solo ayuda a identificar la sucursal.
         </p>
 
         {fileError && (
@@ -317,8 +322,12 @@ async function handleImport() {
 
             <ul className="list-disc space-y-1 pl-5">
             <li>Filas procesadas: {summary.rowsProcessed}</li>
-            <li>Importadas: {summary.imported}</li>
-            <li>Duplicadas: {summary.duplicate}</li>
+            <li>Nuevas o actualizadas: {summary.imported}</li>
+            <li>Ya existentes: {summary.duplicate}</li>
+            <li>Actualizadas entre las importadas: {summary.updated}</li>
+            <li>En Blacklist entre las aceptadas: {summary.blacklisted}</li>
+            <li>Finalizados entre las aceptadas: {summary.finalized}</li>
+            <li>Filas de sucursales omitidas: {summary.skipped}</li>
             <li>Rechazadas: {summary.rejected}</li>
             </ul>
 
@@ -326,6 +335,12 @@ async function handleImport() {
             Referencia de importación: {summary.importId}
             </p>
 
+            {summary.issues?.length > 0 && (
+              <ul className="list-disc pl-5 text-sm text-amber-800">
+                {summary.issues.map(issue => <li key={issue.row}>Fila {issue.row}: {issue.message}</li>)}
+              </ul>
+            )}
+            {summary.rejected > 50 && <p>Se muestran los primeros 50 motivos.</p>}
             {summary.rejected > 0 && (
             <p className="text-sm text-amber-800">
                 Las filas rechazadas no se guardaron. Sus motivos quedaron

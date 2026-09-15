@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
+import SearchInput from '../components/ui/SearchInput'
 import { useAuth } from '../contexts/AuthContext'
 import { useApi } from '../hooks/useApi'
 import { api } from '../services/api'
@@ -14,6 +15,8 @@ const ContactList: React.FC = () => {
   const [selectedCampaignId, setSelectedCampaignId] = useState<number | null>(null)
   const [contacts, setContacts] = useState<Array<any>>([]) // from vw_contactos_disponibles
   const [searchTerm, setSearchTerm] = useState('')
+  const [page, setPage] = useState(1)
+  const requestId = useRef(0)
   const [loadingDetail, setLoadingDetail] = useState(false)
 
   const [openCall, setOpenCall] = useState<{
@@ -76,11 +79,10 @@ const ContactList: React.FC = () => {
   const loadAvailableContacts = async (campaignId: number) => {
   if (!user || user.role !== 'agent') return
 
-  const result = await executeApiCall(() =>
-    api.contacts.getAvailable(campaignId)
-  )
+  const currentRequest = ++requestId.current
+  const result = await executeApiCall(() => api.contacts.getAvailable(campaignId))
 
-  if (result) {
+  if (result && currentRequest === requestId.current) {
     setContacts(result.contacts || [])
   }
 }
@@ -120,6 +122,8 @@ const ContactList: React.FC = () => {
   ) => {
     const campaignId = e.target.value ? Number(e.target.value) : null
 
+    requestId.current += 1
+    setPage(1)
     setSelectedCampaignId(campaignId)
     setSearchTerm('')
     setLoadingDetail(false)
@@ -144,13 +148,14 @@ const ContactList: React.FC = () => {
     }
   }
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setPage(1)
     setSearchTerm(e.target.value)
   }
 
   const filteredContacts = contacts.filter(contact => {
     const term = searchTerm.toLowerCase()
     return (
-      contact.clave.toLowerCase().includes(term) ||
+      String(contact.clave || '').toLowerCase().includes(term) ||
       (contact.razon_social?.toLowerCase().includes(term) ?? false)
     )
   })
@@ -185,7 +190,7 @@ const ContactList: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6"><div className="page-heading"><div className="eyebrow">Espacio del agente</div><h1>Tu próxima conversación.</h1><p>Elige una campaña y prepara el contacto que vas a llamar.</p></div>
       {checkingOpenCall && (
   <p role="status">Comprobando si tienes una llamada abierta...</p>
 )}
@@ -222,8 +227,8 @@ const ContactList: React.FC = () => {
   </div>
 )}
       {/* Campaign Selection */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-bold mb-4">Seleccione una campaña</h2>
+      <div className="bg-surface rounded-lg shadow p-6">
+        <h2 className="text-xl font-bold mb-4">Campaña de trabajo</h2>
         <div className="mb-4">
           <label htmlFor="campaign-select" className="block text-sm font-medium text-gray-700 mb-2">
             Campaña
@@ -248,18 +253,17 @@ const ContactList: React.FC = () => {
       {/* Search and Contacts List */}
       {selectedCampaignId && (
         <>
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-surface rounded-lg shadow p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold mb-0">Contactos disponibles</h2>
-              <input
-                type="text"
-                placeholder="Buscar por clave o razón social"
+              <SearchInput aria-label="Buscar por clave o razón social" onClear={() => { setSearchTerm(''); setPage(1) }} placeholder="Buscar por clave o razón social"
                 value={searchTerm}
                 onChange={handleSearchChange}
                 className="pl-3 pr-10 py-2 text-base border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm w-64"
               />
             </div>
 
+            <p className="small mb-4" role="status">{loading ? 'Consultando contactos…' : `${filteredContacts.length} contactos disponibles`}</p>
             {filteredContacts.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200">
@@ -279,8 +283,8 @@ const ContactList: React.FC = () => {
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {filteredContacts.map((contact) => (
+                  <tbody className="bg-surface divide-y divide-gray-200">
+                    {filteredContacts.slice((page - 1) * 25, page * 25).map((contact) => (
                       <tr key={contact.client_id} className="hover:bg-gray-50">
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           {contact.clave}
@@ -295,7 +299,7 @@ const ContactList: React.FC = () => {
                           <button
                             onClick={() => handleCallContact(contact)}
                             disabled={
-                              loadingDetail || 
+                              loading || loadingDetail || 
                               checkingOpenCall || 
                               openCallError !== null ||
                               openCall !== null}
@@ -314,7 +318,7 @@ const ContactList: React.FC = () => {
                 No hay contactos disponibles para esta campaña con el filtro actual
               </p>
             )}
-          </div>
+          <div className="call-actions"><button disabled={page === 1} onClick={() => setPage(v => v - 1)}>Anterior</button><span className="small">Página {page} de {Math.max(1, Math.ceil(filteredContacts.length / 25))}</span><button disabled={page * 25 >= filteredContacts.length} onClick={() => setPage(v => v + 1)}>Siguiente</button></div></div>
         </>
       )}
     </div>

@@ -7,6 +7,7 @@ import { hashPassword } from '../../utils/auth.js';
 import { AppError } from '../../utils/errors.js';
 import { sql } from 'kysely';
 import { startWorkRound } from './rounds.service.js';
+import { listFinalizedContacts } from './finalizations.service.js';
 
 const CreateUserSchema = z.object({
   username: z.string().min(3),
@@ -16,6 +17,14 @@ const CreateUserSchema = z.object({
 });
 
 export async function adminRoutes(app: FastifyInstance) {
+  app.get('/api/admin/contactos-finalizados', {preHandler: requireRole('admin')}, async request => {
+    const query = z.object({
+      campaignId: z.coerce.number().int().positive().optional(),
+      search: z.string().trim().max(150).default(''),
+      page: z.coerce.number().int().positive().max(100000).default(1),
+    }).parse(request.query);
+    return listFinalizedContacts(query);
+  });
     app.get(
     '/api/admin/rondas/historial',
     { preHandler: requireRole('admin') },
@@ -82,6 +91,7 @@ export async function adminRoutes(app: FastifyInstance) {
       assigned: number;
       blocked: number;
       inactive: number;
+      finalized: number;
       eligible: number;
     }>`
       SELECT
@@ -90,10 +100,11 @@ export async function adminRoutes(app: FastifyInstance) {
           WHERE b.blacklist_id IS NOT NULL
         )::integer AS blocked,
         COUNT(*) FILTER (
-          WHERE b.blacklist_id IS NULL AND NOT c.is_active
+          WHERE b.blacklist_id IS NULL AND f.client_id IS NULL AND NOT c.is_active
         )::integer AS inactive,
+        COUNT(*) FILTER (WHERE b.blacklist_id IS NULL AND f.client_id IS NOT NULL)::integer AS finalized,
         COUNT(*) FILTER (
-          WHERE b.blacklist_id IS NULL AND c.is_active
+          WHERE b.blacklist_id IS NULL AND f.client_id IS NULL AND c.is_active
         )::integer AS eligible
       FROM public.contact_assignments AS a
       JOIN public.clients AS c
@@ -102,6 +113,8 @@ export async function adminRoutes(app: FastifyInstance) {
         ON b.client_id = a.client_id
         AND b.campaign_id = a.campaign_id
         AND b.ended_at IS NULL
+      LEFT JOIN (SELECT DISTINCT client_id,campaign_id FROM public.contact_finalizations) f
+        ON f.client_id=a.client_id AND f.campaign_id=a.campaign_id
       WHERE a.campaign_id = ${campaignId}
         AND a.agent_id = ${agentId}
         AND a.ended_at IS NULL

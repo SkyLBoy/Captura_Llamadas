@@ -29,6 +29,10 @@ const PG_RAISE_EXCEPTION = 'P0001'; // usado por RAISE EXCEPTION en las funcione
 export function translatePgError(err: unknown): AppError {
   const pgErr = err as Partial<DatabaseError> & { code?: string; message?: string };
 
+  if (pgErr?.code === '42P01' && /contact_finalizations|vw_contactos_finalizados/.test(pgErr.message ?? '')) {
+    return new AppError(503, 'Falta aplicar la migración 003_contact_finalizations.sql en PostgreSQL.', 'FINALIZATIONS_MIGRATION_REQUIRED');
+  }
+
   if (pgErr?.code === PG_RAISE_EXCEPTION && pgErr.message) {
     // Mensajes de negocio explicitos de los triggers/funciones del schema.
     return new AppError(409, pgErr.message, 'BUSINESS_RULE');

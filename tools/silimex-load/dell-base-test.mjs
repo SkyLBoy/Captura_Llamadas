@@ -1,0 +1,8 @@
+import 'dotenv/config';import fs from 'node:fs/promises';import pg from 'pg';import assert from 'node:assert/strict';
+const db=new pg.Client();await db.connect();
+const {pool}=await import('../../dist/db/pool.js');
+pool.connect=async()=>({query:async(s,a)=>{s=typeof s==='string'?s:s.text;if(/^\s*(begin|commit|rollback)\s*$/i.test(s))return {rows:[],rowCount:0};return db.query(s,a);},release(){}});
+const {importContactsFromExcel}=await import('../../dist/modules/contacts/import.service.js');
+try{await db.query('BEGIN');const campaign=(await db.query("SELECT campaign_id FROM campaigns WHERE name='PARTNER DELL'")).rows[0].campaign_id;const admin=(await db.query("SELECT user_id FROM users WHERE role='admin' AND is_active ORDER BY user_id LIMIT 1")).rows[0].user_id;
+for(const [name,file] of [['Monserrat Abechuco','PARTNER DELL ABECHUCO 2026.xlsm'],['Carlos Ordaz','PARTNER_DELL_ORDAZ_2026.xlsx']]){const agent=(await db.query('SELECT user_id FROM users WHERE full_name=$1',[name])).rows[0].user_id;await db.query("INSERT INTO work_rounds(campaign_id,agent_id,name,started_at,created_by_user_id) VALUES($1,$2,'Septiembre 2026 · carga inicial','2026-09-01 00:00:00-07',$3)",[campaign,agent,admin]);const result=await importContactsFromExcel({fileBuffer:await fs.readFile('C:/Users/VNCAdmin-12/Downloads/'+file),fileName:file,campaignId:campaign,userId:admin,agentId:agent});console.log(name,JSON.stringify(result));assert.equal(result.rejected,0);}
+}catch(e){console.error(e.message);process.exitCode=1;}finally{await db.query('ROLLBACK');await db.end();await pool.end();console.log('Test rolled back');}

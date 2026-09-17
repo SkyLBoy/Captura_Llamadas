@@ -364,6 +364,7 @@ export interface ContactFinalizationsTable {
 }
 
 export interface Database {
+  vw_contactos_finalizados: { client_id: number; campaign_id: number };
   contact_finalizations: ContactFinalizationsTable;
   users: UsersTable;
   campaigns: CampaignsTable;

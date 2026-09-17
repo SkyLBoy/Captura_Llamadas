@@ -162,7 +162,7 @@ if (dataSheet) {
     if (!schema.rows[0]?.ready) {
       throw new AppError(409, 'Falta aplicar la migración 002_import_blacklist.sql en PostgreSQL antes de importar.', 'IMPORT_MIGRATION_REQUIRED');
     }
-    await trx.selectFrom('contact_finalizations').select('attempt_id').limit(1).execute();
+    await trx.selectFrom('vw_contactos_finalizados').select('client_id').limit(1).execute();
     const agent=await trx.selectFrom('users').select('user_id').where('user_id','=',opts.agentId).where('role','=','agent').where('is_active','=',true).executeTakeFirst();
     if(!agent) throw new AppError(400,'Selecciona un agente activo.','INVALID_AGENT');
     // Un solo intento por (campana, hash de archivo) puede llegar a 'success'.
@@ -337,7 +337,7 @@ if (dataSheet) {
         const block = await trx.selectFrom('contact_blacklist').select('blacklist_id')
           .where('client_id', '=', client.client_id).where('campaign_id', '=', opts.campaignId)
           .where('ended_at', 'is', null).executeTakeFirst();
-        const finalized = await trx.selectFrom('contact_finalizations').select('attempt_id')
+        const finalized = await trx.selectFrom('vw_contactos_finalizados').select('client_id')
           .where('client_id', '=', client.client_id).where('campaign_id', '=', opts.campaignId).executeTakeFirst();
         if (assignment && assignment.round_id !== workRound.round_id && !block && !finalized && status !== 'BLACKLIST') {
           throw new AppError(409,'La asignación no pertenece a la ronda activa.','ASSIGNMENT_ROUND_CONFLICT');
@@ -499,7 +499,7 @@ export async function distributeContacts(opts: {
       .selectFrom('clients as c')
       .select('c.client_id')
       .where('c.is_active', '=', true)
-      .where(eb => eb.not(eb.exists(eb.selectFrom('contact_finalizations as f').select('f.attempt_id')
+      .where(eb => eb.not(eb.exists(eb.selectFrom('vw_contactos_finalizados as f').select('f.client_id')
         .whereRef('f.client_id', '=', 'c.client_id').where('f.campaign_id', '=', opts.campaignId))))
       .where('c.source_namespace', '=', namespace)
       .where(eb => eb.not(eb.exists(eb.selectFrom('contact_blacklist as b').select('b.blacklist_id').whereRef('b.client_id', '=', 'c.client_id').where('b.campaign_id', '=', opts.campaignId).where('b.ended_at', 'is', null))))

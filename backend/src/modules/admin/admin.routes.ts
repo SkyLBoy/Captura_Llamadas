@@ -8,6 +8,7 @@ import { AppError } from '../../utils/errors.js';
 import { sql } from 'kysely';
 import { startWorkRound } from './rounds.service.js';
 import { listFinalizedContacts } from './finalizations.service.js';
+import { changeUser, EditUserSchema, DeleteUserSchema } from './users.service.js';
 
 const CreateUserSchema = z.object({
   username: z.string().min(3),
@@ -113,7 +114,7 @@ export async function adminRoutes(app: FastifyInstance) {
         ON b.client_id = a.client_id
         AND b.campaign_id = a.campaign_id
         AND b.ended_at IS NULL
-      LEFT JOIN (SELECT DISTINCT client_id,campaign_id FROM public.contact_finalizations) f
+      LEFT JOIN (SELECT DISTINCT client_id,campaign_id FROM public.vw_contactos_finalizados) f
         ON f.client_id=a.client_id AND f.campaign_id=a.campaign_id
       WHERE a.campaign_id = ${campaignId}
         AND a.agent_id = ${agentId}
@@ -135,8 +136,16 @@ export async function adminRoutes(app: FastifyInstance) {
   },
 );
   app.get('/api/admin/users', { preHandler: requireRole('admin') }, async () => ({
-    users: await db.selectFrom('users').select(['user_id','username','full_name','role','is_active']).orderBy('full_name').execute(),
+    users: await db.selectFrom('users').select(['user_id','username','full_name','role','is_active',sql<string>`updated_at::text`.as('updated_at')]).orderBy('full_name').execute(),
   }));
+  app.patch('/api/admin/users/:userId',{preHandler:requireRole('admin')},async request=>{
+    const {userId}=z.object({userId:z.coerce.number().int().positive()}).parse(request.params);
+    return changeUser(request.session.user!.userId,userId,EditUserSchema.parse(request.body));
+  });
+  app.delete('/api/admin/users/:userId',{preHandler:requireRole('admin')},async request=>{
+    const {userId}=z.object({userId:z.coerce.number().int().positive()}).parse(request.params);
+    return changeUser(request.session.user!.userId,userId,DeleteUserSchema.parse(request.body),true);
+  });
   // Canalizaciones que el schema inserto sin disposicion asignada (inactivas
   // a proposito). El admin debe clasificarlas antes de que un agente pueda
   // usarlas para cerrar una llamada.

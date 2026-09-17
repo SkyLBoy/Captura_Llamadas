@@ -5,3 +5,9 @@ dist/
 !.env.example
 *.log
 archive/
+backups/
+tools/silimex-load/*-data.json
+tools/silimex-load/*-inspection.json
+tools/silimex-load/*-analysis.json
+tools/silimex-load/*-results.json
+tools/silimex-load/__pycache__/

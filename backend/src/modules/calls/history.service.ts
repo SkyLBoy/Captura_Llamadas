@@ -42,9 +42,13 @@ export async function getDailyHistory(query: z.infer<typeof HistoryQuerySchema>,
       FROM call_attempts a JOIN campaigns c USING(campaign_id) WHERE ${where}
       ORDER BY a.call_start DESC,a.attempt_id DESC LIMIT 25 OFFSET $4`, [...params, (page - 1) * 25])).rows;
     const scope = user.role === 'admin' ? null : user.userId;
-    const campaigns = (await connection.query(`SELECT DISTINCT c.campaign_id AS id,c.name
-      FROM call_attempts a JOIN campaigns c USING(campaign_id)
-      WHERE ($1::int IS NULL OR a.agent_id=$1) ORDER BY c.name`, [scope])).rows;
+    // Active campaigns remain selectable before the agent's first call.
+    // Retired campaigns remain available when this user has historical activity.
+    const campaigns = (await connection.query(`SELECT c.campaign_id AS id,c.name
+      FROM campaigns c WHERE c.is_active OR EXISTS (
+        SELECT 1 FROM call_attempts a WHERE a.campaign_id=c.campaign_id
+        AND ($1::int IS NULL OR a.agent_id=$1)
+      ) ORDER BY c.name`, [scope])).rows;
     const agents = user.role === 'admin' ? (await connection.query(`SELECT DISTINCT u.user_id AS id,u.full_name AS name
       FROM call_attempts a JOIN users u ON u.user_id=a.agent_id ORDER BY u.full_name,u.user_id`)).rows : [];
     await connection.query('COMMIT');

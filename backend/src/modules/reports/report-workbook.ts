@@ -10,7 +10,7 @@ export interface ClosingMonth {
 }
 export interface ClosingCall {
   date: string; client: string; channel: string; disposition: string;
-  phone: string; agent: string; durationDays: number;
+  phone: string; agent: string; durationDays: number | null;
 }
 export interface ClosingQuestion {
   id: number; versionId: number; version: string; text: string;
@@ -26,6 +26,7 @@ export interface ClosingData {
   months: ClosingMonth[]; calls: ClosingCall[];
   previousTpa: number; currentTpa: number;
   questions: ClosingQuestion[]; surveys: ClosingSurvey[];
+  notes?: string[];
 }
 interface Layout {
   columns: Partial<ExcelJS.Column>[];
@@ -185,6 +186,13 @@ export async function buildClosingWorkbook(data: ClosingData): Promise<Buffer> {
       cursor=end+3;
     }
     if(!data.questions.length) results.getCell('B10').value='Sin encuestas registradas en el periodo seleccionado.';
+  }
+  if(data.notes?.length) {
+    const notes=workbook.addWorksheet('NOTAS DEL INFORME');
+    notes.columns=[{header:'Alcance y calidad de los datos',key:'note',width:115}];
+    notes.getRow(1).font={bold:true,color:{argb:'FFFFFFFF'}};
+    notes.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF244062'}};
+    for(const note of data.notes) {const row=notes.addRow([note]);row.alignment={wrapText:true,vertical:'top'};row.height=45;}
   }
   const buffer=Buffer.from(await workbook.xlsx.writeBuffer());
   return charts.length ? addNativeCharts(buffer,charts) : buffer;

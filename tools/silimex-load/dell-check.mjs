@@ -1,0 +1,5 @@
+import 'dotenv/config';import fs from 'node:fs/promises';import pg from 'pg';
+const d=JSON.parse(await fs.readFile('tools/silimex-load/dell-data.json','utf8'));const db=new pg.Client();await db.connect();
+for(const [file,s] of Object.entries(d)){const rows=s.sheets.LLAMADAS.slice(1).filter(r=>/^2026-/.test(String(r.values[0])));const count=i=>Object.fromEntries([...new Set(rows.map(r=>r.values[i]))].map(v=>[v,rows.filter(r=>r.values[i]===v).length]));console.log(JSON.stringify({file,calls:rows.length,dates:[...new Set(rows.map(r=>r.values[0].slice(0,10)))],channels:count(13),dispositions:count(14),base:s.sheets.BASE.length-1}));}
+console.log('channels',JSON.stringify((await db.query("SELECT ch.channel_id,ch.code,ch.description,d.code AS disposition FROM channels ch JOIN campaigns c USING(campaign_id) LEFT JOIN dispositions d USING(disposition_id) WHERE c.name='PARTNER DELL'")).rows));
+console.log('existing',JSON.stringify((await db.query("SELECT c.name,count(a.attempt_id) FROM campaigns c LEFT JOIN call_attempts a USING(campaign_id) GROUP BY c.name")).rows));await db.end();

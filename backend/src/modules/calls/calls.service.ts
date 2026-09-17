@@ -58,7 +58,7 @@ export async function openCall(input: OpenCallInput, userId: number) {
 
     // Protege también una ficha que el agente dejó abierta antes del cierre.
     await trx.selectFrom('clients').select('client_id').where('client_id', '=', input.clientId).forUpdate().executeTakeFirst();
-    const finalized = await trx.selectFrom('contact_finalizations').select('attempt_id')
+    const finalized = await trx.selectFrom('vw_contactos_finalizados').select('client_id')
       .where('client_id', '=', input.clientId).where('campaign_id', '=', input.campaignId).executeTakeFirst();
     if (finalized) throw new AppError(409,
       'Contacto finalizado: ya tuvo un resultado Exitoso o una encuesta contestada en esta campaña.',

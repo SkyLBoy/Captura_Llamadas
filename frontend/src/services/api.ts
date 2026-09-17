@@ -387,6 +387,16 @@ export const api = {
         enabledContacts: number
       }>
     },
+    updateUser: async (id: number, data: {username:string;fullName:string;role:'agent'|'admin';isActive:boolean;expectedUpdatedAt:string}) => {
+      const response=await fetch(`${API_BASE_URL}/admin/users/${id}`,{method:'PATCH',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
+      if(!response.ok)throw new ApiError(response.status,await getErrorMessage(response,'No se pudo actualizar el usuario.'))
+      return response.json()
+    },
+    deleteUser: async (id:number, expectedUpdatedAt:string) => {
+      const response=await fetch(`${API_BASE_URL}/admin/users/${id}`,{method:'DELETE',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedUpdatedAt})})
+      if(!response.ok)throw new ApiError(response.status,await getErrorMessage(response,'No se pudo eliminar el acceso.'))
+      return response.json()
+    },
       getUsers: async () => {
         const response = await fetch(`${API_BASE_URL}/admin/users`, {
           credentials: 'include',
